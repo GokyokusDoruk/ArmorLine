@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RARITIES, RARITY_INFO, rarityChances, rarityCss, rarityIndex, type Rarity } from '../data/rarity';
-import { CLASSES, CLASS_INFO, NATIONS, NATION_INFO, TANK_NAMES, type Nation, type TankStats } from '../data/tanks';
+import { CLASSES, CLASS_INFO, NATIONS, NATION_INFO, TANK_NAMES, type Nation, type TankClass, type TankStats } from '../data/tanks';
 import { SLOTS, SLOT_INFO, partEffects, partName, type Part, type Slot } from '../data/parts';
 import {
   equipPart, grantStarterTanks, loadProfile, partOwner, resetProfile, saveProfile, selectedTank,
@@ -18,6 +18,11 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 function rarityBadge(r: Rarity): string {
   return `<span class="rbadge r-${r}" style="--rc:${rarityCss(r)}">${RARITY_INFO[r].name}</span>`;
+}
+
+/** Photo of a tank model, served from public/tanks. */
+function tankImg(n: Nation, c: TankClass): string {
+  return `${import.meta.env.BASE_URL}tanks/${n}-${c}.jpg`;
 }
 
 function coins(n: number): string {
@@ -95,6 +100,7 @@ export class App {
         <div class="nation-list">
           ${NATIONS.map((n) => `
             <button class="nation-card" data-n="${n}">
+              <div class="nimgs">${CLASSES.map((c) => `<img src="${tankImg(n, c)}" alt="${TANK_NAMES[n][c]}" loading="lazy">`).join('')}</div>
               <div class="nflag">${NATION_INFO[n].flag}</div>
               <div class="nname">${NATION_INFO[n].name}</div>
               <div class="ntraits">${NATION_INFO[n].traits.map((t) => `<span>${t}</span>`).join('')}</div>
@@ -136,6 +142,7 @@ export class App {
         </header>
 
         <div class="tank-title">
+          <img class="tphoto" src="${tankImg(t.nation, t.cls)}" alt="${TANK_NAMES[t.nation][t.cls]}" style="--rc:${rarityCss(t.rarity)}">
           <div class="tname">${NATION_INFO[t.nation].flag} ${TANK_NAMES[t.nation][t.cls]}</div>
           <div class="tmeta">${rarityBadge(t.rarity)} <span class="cls">${CLASS_INFO[t.cls].name}</span> <span class="nat">${NATION_INFO[t.nation].name}</span></div>
           <div class="trole">${CLASS_INFO[t.cls].role}</div>
@@ -152,6 +159,7 @@ export class App {
           <div class="tank-row">
             ${sortedTanks.map((x) => `
               <button class="tank-card ${x.id === t.id ? 'sel' : ''}" data-t="${x.id}" style="--rc:${rarityCss(x.rarity)}">
+                <img class="tc-img" src="${tankImg(x.nation, x.cls)}" alt="" loading="lazy">
                 <span class="tc-flag">${NATION_INFO[x.nation].flag}</span>
                 <span class="tc-name">${TANK_NAMES[x.nation][x.cls]}</span>
                 <span class="tc-cls">${CLASS_INFO[x.cls].short}</span>
@@ -443,6 +451,7 @@ export class App {
       const t = rw.tank;
       drops.push(`<div class="drop" style="--rc:${rarityCss(t.rarity)}">
         <div class="drop-kind">YENİ TANK</div>
+        <img class="drop-img" src="${tankImg(t.nation, t.cls)}" alt="">
         <div class="drop-name">${NATION_INFO[t.nation].flag} ${TANK_NAMES[t.nation][t.cls]}</div>
         ${rarityBadge(t.rarity)} <span class="cls">${CLASS_INFO[t.cls].name}</span>
         ${rw.duplicateCoins ? `<div class="dup">Zaten vardı → ${coins(rw.duplicateCoins)}</div>` : ''}
