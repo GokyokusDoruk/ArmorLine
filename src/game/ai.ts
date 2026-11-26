@@ -85,9 +85,9 @@ export class Bot {
     const e = this.target;
     if (cls === 'artillery') {
       // Stay back, drift sideways a bit.
-      const baseZ = -dirToEnemy * 80;
+      const baseZ = -dirToEnemy * (ARENA_HALF - 20);
       if (Math.abs(t.pos.z - baseZ) > 12 || Math.random() < 0.05) {
-        this.goal.set(THREE.MathUtils.clamp(t.pos.x + (Math.random() - 0.5) * 30, -80, 80), 0, baseZ);
+        this.goal.set(THREE.MathUtils.clamp(t.pos.x + (Math.random() - 0.5) * 30, -ARENA_HALF + 20, ARENA_HALF - 20), 0, baseZ);
       }
       return;
     }
@@ -110,11 +110,12 @@ export class Bot {
       if (t.pos.distanceTo(this.lastSeen) < 12) this.lastSeen = null;
     } else {
       // Advance toward the enemy side; the longer nothing is seen, the deeper we push.
-      const push = Math.min(55, this.blind * 1.5);
-      const depth = (cls === 'mobile' ? 55 : cls === 'heavy' ? 30 : -25) + push;
+      const k = ARENA_HALF / 100;
+      const push = Math.min(55, this.blind * 1.5) * k;
+      const depth = (cls === 'mobile' ? 55 : cls === 'heavy' ? 30 : -25) * k + push;
       const lane = ((t.id * 37) % 5) - 2;
       if (t.pos.distanceTo(this.goal) < 10 || this.goal.lengthSq() === 0 || Math.random() < 0.04) {
-        this.goal.set(lane * 30 + (Math.random() - 0.5) * 20, 0, dirToEnemy * depth + (Math.random() - 0.5) * 30);
+        this.goal.set(lane * 30 * k + (Math.random() - 0.5) * 20, 0, dirToEnemy * depth + (Math.random() - 0.5) * 30);
       }
     }
     const lim = ARENA_HALF - 8;

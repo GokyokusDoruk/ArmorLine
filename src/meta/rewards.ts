@@ -9,10 +9,15 @@ export const DROP_CHANCE = {
 
 /** Coins per point of damage dealt. Wins pay double. */
 export const COINS_PER_DAMAGE = 0.5;
+/** Bonus coins per kill and per assist (also doubled on a win). */
+export const COINS_PER_KILL = 300;
+export const COINS_PER_ASSIST = 120;
 
 export interface BattleReward {
   win: boolean;
   damage: number;
+  kills: number;
+  assists: number;
   coins: number;
   tank?: OwnedTank;
   /** Set when the dropped tank was a duplicate and got converted to coins. */
@@ -20,9 +25,16 @@ export interface BattleReward {
   part?: Part;
 }
 
-export function rollRewards(win: boolean, damage: number, rand: () => number = Math.random): BattleReward {
-  const coins = Math.round(damage * COINS_PER_DAMAGE * (win ? 2 : 1));
-  const r: BattleReward = { win, damage, coins };
+export function rollRewards(
+  win: boolean,
+  damage: number,
+  rand: () => number = Math.random,
+  kills = 0,
+  assists = 0,
+): BattleReward {
+  const base = damage * COINS_PER_DAMAGE + kills * COINS_PER_KILL + assists * COINS_PER_ASSIST;
+  const coins = Math.round(base * (win ? 2 : 1));
+  const r: BattleReward = { win, damage, kills, assists, coins };
   if (rand() < (win ? DROP_CHANCE.tank.win : DROP_CHANCE.tank.loss)) r.tank = randomTank(rand);
   if (rand() < (win ? DROP_CHANCE.part.win : DROP_CHANCE.part.loss)) r.part = randomPart(rand);
   return r;

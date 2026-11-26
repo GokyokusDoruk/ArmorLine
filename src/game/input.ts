@@ -155,8 +155,21 @@ export class Input {
     }
   }
 
+  private keyHandlers = new Map<string, (down: boolean) => void>();
+
+  /** Extra key binding (e.g. Tab for the scoreboard). */
+  onKey(key: string, fn: (down: boolean) => void): void {
+    this.keyHandlers.set(key, fn);
+  }
+
   private key(e: KeyboardEvent, down: boolean): void {
     const k = e.key.toLowerCase();
+    const h = this.keyHandlers.get(k);
+    if (h) {
+      e.preventDefault();
+      if (!e.repeat) h(down);
+      return;
+    }
     if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'shift', 'e', 'f'].includes(k)) {
       e.preventDefault();
     }

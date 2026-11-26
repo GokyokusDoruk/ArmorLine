@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RARITIES, rarityChances, rollRarity } from '../data/rarity';
 import { analyzeShot, effectiveArmor, penChance, resolveHit, ricochetChance } from '../game/armor';
-import { baseTankStats } from '../data/tanks';
+import { applyLevel, applyWeapon, baseTankStats, upgradeCost } from '../data/tanks';
 import { applyParts } from '../data/parts';
 import { newProfile, grantStarterTanks, equipPart, tankStats } from './profile';
 import { applyReward, rollRewards } from './rewards';
@@ -57,7 +57,7 @@ describe('stats', () => {
     expect(ussr.hullArmor.front).toBeGreaterThan(ger.hullArmor.front);
     expect(ger.pen).toBeGreaterThan(ussr.pen);
     expect(fr.speed).toBeGreaterThan(ger.speed);
-    expect(fr.magazine).toBeGreaterThan(1);
+    expect(applyWeapon(fr, 'clip', 'france').magazine).toBe(4);
     expect(uk.reload).toBeLessThan(ger.reload);
   });
   it('rarity and parts make tanks stronger', () => {
@@ -82,7 +82,33 @@ describe('stats', () => {
   });
 });
 
+describe('weapons and levels', () => {
+  it('weapon types trade damage for reload', () => {
+    const s = baseTankStats('germany', 'heavy', 'common');
+    const heavy = applyWeapon(s, 'heavy', 'germany');
+    const rapid = applyWeapon(s, 'rapid', 'germany');
+    expect(heavy.damage).toBeGreaterThan(s.damage);
+    expect(heavy.reload).toBeGreaterThan(s.reload);
+    expect(rapid.damage).toBeLessThan(s.damage);
+    expect(rapid.reload).toBeLessThan(s.reload);
+    const clip = applyWeapon(s, 'clip', 'germany');
+    expect(clip.magazine).toBe(4);
+    expect(clip.reload).toBeGreaterThan(s.reload);
+  });
+  it('levels raise stats and cost more as you go', () => {
+    const s = baseTankStats('ussr', 'mobile', 'rare');
+    expect(applyLevel(s, 1000).hp).toBeCloseTo(s.hp * 1.7992, 3);
+    expect(applyLevel(s, 1).hp).toBe(s.hp);
+    expect(upgradeCost(500)).toBeGreaterThan(upgradeCost(10));
+  });
+});
+
 describe('rewards', () => {
+  it('kills and assists pay extra', () => {
+    const never = () => 0.99;
+    expect(rollRewards(false, 0, never, 2, 1).coins).toBe(2 * 300 + 120);
+    expect(rollRewards(true, 0, never, 1, 0).coins).toBe(600);
+  });
   it('pays damage-based coins, double on win', () => {
     const never = () => 0.99;
     expect(rollRewards(true, 1000, never).coins).toBe(1000);

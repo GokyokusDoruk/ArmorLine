@@ -3,7 +3,13 @@
 Telefon öncelikli, tarayıcıda da oynanan 3D tank PvP oyunu. Vite + TypeScript + Three.js.
 
 ## Oynanış
-- 5'e 5 takım savaşı, 5 dakika. Rakip takımı yok et ya da süre bitince daha fazla canla kal.
+- Modlar: 4v4 (5 dk), 8v8 (6 dk), 12v12 (7 dk). Harita her maçta yeniden üretilir, modla birlikte büyür; 4 tema (Neon Şehir, Çöl Üssü, Zehirli Bölge, Buz Limanı).
+- Rakip takımı yok et ya da süre bitince daha fazla canla kal. Savaşta 📋 (ya da Tab) ile oyun tablosu; maç sonunda da gösterilir.
+- 4 silah türü (tank başına seçilir): Ağır, Standart, Hızlı, Şarjörlü (4 mermi + uzun dolum).
+- Tank seviyesi 1–1000, para ile yükseltilir; her seviye can, hasar, delme, zırh ve dolumu biraz iyileştirir.
+- Elektrik Kalkanı parçası: 20 sn'de dolar, doluyken hasarın %25–60'ını (nadirliğe göre) durdurur; art arda vuruşta toparlanamaz.
+- Yakıt deposu (arka yanlar) delinirse tank 5 sn yanar; dolum bölmesi (taret arkası) delinirse dolum süresi maç sonuna kadar 2 katına çıkar; kopan palet 2 sn yerde görünür.
+- Atış, isabet ve çarpışmalarda tank gövdesi sarsılır, namlu geri teper.
 - 5 ülke (SSCB, Almanya, ABD, İngiltere, Fransa) × 4 sınıf (Tank, Mobil, Sniper, Artillery) = 20 tank.
 - 8 nadirlik: Poor, Common, Uncommon, Rare, Epic, Legendary, Mythic, Divine. Düşme olasılıkları 15/12/9/6/5/4/3/2 ağırlıklarının %100'e oranlanmış hâli.
 - Zırh delme, eğimli zırh, sektirme, görüş (spot) sistemi.
@@ -15,7 +21,7 @@ Telefon öncelikli, tarayıcıda da oynanan 3D tank PvP oyunu. Vite + TypeScript
 - Modül hasarı: palete isabet eden tank 2 saniye hareket edemez (fren yapar). Arkadan delen vuruş %35 ihtimalle motoru bozar, hız maç sonuna kadar yarıya iner.
 - Çarpışma: tanklar iç içe geçmez; duvara hızlı çarpan tank hasar alır; düşmana çarpmak (ram) hasar verir.
 - Mobil tankların gördüğü düşman, takıma 10 saniye görünür kalır.
-- Ödüller: hasar kadar para (galibiyette 2 katı); galibiyette %10 tank / %15 parça, mağlubiyette %5 tank / %10 parça şansı. Aynı tank tekrar düşerse paraya çevrilir.
+- Ödüller: hasar ×0.5 + imha başına 300 + asist başına 120 para (galibiyette 2 katı); galibiyette %10 tank / %15 parça, mağlubiyette %5 tank / %10 parça şansı. Aynı tank tekrar düşerse paraya çevrilir.
 - Mağaza her 5 dakikada bir yenilenir ve 5 parça satar. Nadir parçalar hem daha pahalı hem daha seyrek gelir.
 - İlerleme tarayıcıda (`localStorage`) saklanır.
 

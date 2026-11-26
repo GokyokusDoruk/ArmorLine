@@ -135,6 +135,26 @@ export class Fx {
     }
   }
 
+  /** Burning fuel: bright flames licking upward plus dark smoke. */
+  flame(at: THREE.Vector3): void {
+    for (let i = 0; i < 2; i++) {
+      const life = 0.35 + Math.random() * 0.35;
+      this.spawn({
+        x: at.x + (Math.random() - 0.5) * 0.8, y: at.y, z: at.z + (Math.random() - 0.5) * 0.8,
+        vx: (Math.random() - 0.5) * 0.8, vy: 3 + Math.random() * 3, vz: (Math.random() - 0.5) * 0.8,
+        life, max: life, size: 0.9 + Math.random() * 0.6, grow: 0.8,
+        r: 1, g: 0.45 + Math.random() * 0.3, b: 0.08, drag: 1.5, additive: true,
+      });
+    }
+    if (Math.random() < 0.4) {
+      const life = 1.4 + Math.random();
+      this.spawn({
+        x: at.x, y: at.y + 1, z: at.z, vx: (Math.random() - 0.5), vy: 2.5, vz: (Math.random() - 0.5),
+        life, max: life, size: 1.2, grow: 2, r: 0.08, g: 0.08, b: 0.09, drag: 0.6,
+      });
+    }
+  }
+
   dust(at: THREE.Vector3): void {
     const life = 0.8 + Math.random() * 0.5;
     this.spawn({

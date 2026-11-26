@@ -3,6 +3,7 @@ import type { Rarity } from '../data/rarity';
 import { TANK_NAMES, type Nation, type TankClass, type TankStats } from '../data/tanks';
 import { DIMS, buildTankModel, setDestroyedLook, type TankDims, type TankModel } from './tankModel';
 import { heightAt, rayBox, resolveRect, type Rect } from './world';
+import { SHIELD_RECHARGE } from '../data/parts';
 
 /** Hitting a wall slower than this does no damage (units/s). */
 export const WALL_SAFE_SPEED = 5;
@@ -20,7 +21,7 @@ export interface TankSpec {
 
 export type ArmorZone =
   | 'upperFront' | 'lowerFront' | 'side' | 'track' | 'rear' | 'roof'
-  | 'turretFront' | 'turretSide' | 'turretRear' | 'cupola';
+  | 'turretFront' | 'turretSide' | 'turretRear' | 'cupola' | 'fuel';
 
 export interface ZoneInfo {
   name: string;
@@ -43,9 +44,22 @@ export const ZONES: Record<ArmorZone, ZoneInfo> = {
   roof: { name: 'Tavan', dmgMult: 1.1, ricochetBonus: 0, slope: 0, weak: false },
   turretFront: { name: 'Taret önü', dmgMult: 0.85, ricochetBonus: 0.05, slope: 0.45, weak: false },
   turretSide: { name: 'Taret yanı', dmgMult: 1, ricochetBonus: 0, slope: 0, weak: false },
-  turretRear: { name: 'Taret arkası', dmgMult: 1.25, ricochetBonus: 0, slope: 0, weak: false },
+  turretRear: { name: 'Dolum bölmesi', dmgMult: 1.25, ricochetBonus: 0, slope: 0, weak: true },
   cupola: { name: 'Kupola', dmgMult: 1.1, ricochetBonus: 0, slope: 0, weak: true },
+  fuel: { name: 'Yakıt deposu', dmgMult: 1.1, ricochetBonus: 0, slope: 0, weak: true },
 };
+
+/** Weak-spot overlay keys and the armor zone each one shows. */
+export const WEAK_KEYS = { lowerFront: 'lowerFront', rear: 'rear', cupola: 'cupola', loader: 'turretRear', fuelL: 'fuel', fuelR: 'fuel' } as const;
+export type WeakKey = keyof typeof WEAK_KEYS;
+
+/** A burning tank loses this share of its max HP per second. */
+export const FIRE_DPS = 0.025;
+export const FIRE_SECONDS = 5;
+/** A penetrating hit on the loader (turret rear) doubles reload time for the rest of the match. */
+export const LOADER_RELOAD_MULT = 2;
+/** Assists count damage dealt within this many seconds before the kill. */
+export const ASSIST_WINDOW = 20;
 
 /** Chance that a penetrating rear hit damages the engine. */
 export const ENGINE_DAMAGE_CHANCE = 0.35;
@@ -108,6 +122,25 @@ export class Tank {
   trackedTimer = 0;
   /** Engine damaged: top speed halved for the rest of the match. */
   engineDamaged = false;
+  /** Loader hit: reload doubled for the rest of the match. */
+  loaderDamaged = false;
+  /** Seconds left burning, who set the fire, and damage waiting to be applied. */
+  burnTimer = 0;
+  burnSource: Tank | null = null;
+  burnPending = 0;
+  /** 0..1 electric shield charge (only if stats.shieldPower > 0). */
+  shieldCharge = 1;
+  /** 0..1 shield flash after absorbing a hit (visual). */
+  shieldFlash = 0;
+  /** Which track is broken (visual), if any. */
+  brokenTrack: 'left' | 'right' | null = null;
+  assists = 0;
+  /** Enemy tanks that damaged us and when (for assists). */
+  readonly damageLog = new Map<Tank, number>();
+  /** Visual shake of the hull: amplitude along local x/z and time since it started. */
+  private rock = { x: 0, z: 0, t: 99 };
+  private recoil = 0;
+  time = 0;
 
   private prevTurretYaw = 0;
   private impactCooldown = 0;
@@ -184,11 +217,32 @@ export class Tank {
   onFired(): void {
     this.ammo -= 1;
     this.aim = Math.max(0, this.aim - 0.75);
+    const mult = this.loaderDamaged ? LOADER_RELOAD_MULT : 1;
     if (this.ammo > 0) {
-      this.reloadLeft = this.stats.clipInterval;
+      this.reloadLeft = this.stats.clipInterval * mult;
     } else {
-      this.reloadLeft = this.stats.reload;
+      this.reloadLeft = this.stats.reload * mult;
     }
+    // Recoil: barrel kicks back, hull rocks opposite to the gun.
+    this.recoil = 1;
+    const rel = this.turretYaw - this.yaw;
+    const k = 0.5 + Math.min(1, this.stats.damage / 500) * 0.6;
+    this.shakeHull(-Math.sin(rel) * k, -Math.cos(rel) * k);
+  }
+
+  /** Rock the hull along a local direction (x = right side, z = front). */
+  shakeHull(x: number, z: number): void {
+    this.rock = { x, z, t: 0 };
+  }
+
+  /** Electric shield: a full shield stops shieldPower of the damage, then needs SHIELD_RECHARGE s to refill. */
+  absorb(dmg: number): number {
+    const p = this.stats.shieldPower;
+    if (p <= 0 || dmg <= 0) return dmg;
+    const stopped = dmg * p * this.shieldCharge;
+    this.shieldFlash = Math.max(this.shieldFlash, 0.3 + this.shieldCharge * 0.7);
+    this.shieldCharge = 0;
+    return Math.round(dmg - stopped);
   }
 
   update(dt: number): void {
@@ -202,6 +256,16 @@ export class Tank {
         this.reloadLeft = 0;
         if (this.ammo <= 0) this.ammo = s.magazine;
       }
+    }
+
+    this.time += dt;
+    if (this.stats.shieldPower > 0) this.shieldCharge = Math.min(1, this.shieldCharge + dt / SHIELD_RECHARGE);
+    this.shieldFlash = Math.max(0, this.shieldFlash - dt * 1.8);
+    this.recoil = Math.max(0, this.recoil - dt * 4);
+    this.rock.t += dt;
+    if (this.burnTimer > 0) {
+      this.burnTimer -= dt;
+      this.burnPending += this.stats.hp * FIRE_DPS * dt;
     }
 
     // Hull movement. Broken tracks: no drive or turning, the tank brakes to a stop.
@@ -281,17 +345,49 @@ export class Tank {
     r.rotation.set(-this.tiltPitch, this.yaw, this.tiltRoll);
     this.model.turret.rotation.y = wrapAngle(this.turretYaw - this.yaw);
     this.model.gun.rotation.x = -(this.gunPitch - this.slopeAlong(this.turretYaw));
+    // Damped wobble after firing, hits and collisions.
+    const w = Math.exp(-this.rock.t * 5) * Math.cos(this.rock.t * 17);
+    this.model.body.rotation.x = this.rock.z * 0.09 * w;
+    this.model.body.rotation.z = -this.rock.x * 0.09 * w;
+    if (this.model.recoil) this.model.recoil.position.z = -this.recoil * this.recoil * this.dims.barrel * 0.12;
+    const sh = this.model.shield;
+    if (sh) {
+      const on = this.alive && this.stats.shieldPower > 0;
+      const idle = this.shieldCharge >= 1 ? 0.05 + 0.03 * Math.sin(this.time * 3) : 0;
+      const o = on ? Math.max(idle, this.shieldFlash * 0.75) : 0;
+      sh.visible = o > 0.005;
+      (sh.material as THREE.MeshBasicMaterial).opacity = o;
+      sh.scale.setScalar(1 + this.shieldFlash * 0.06);
+      sh.rotation.y = this.time * 0.6;
+    }
   }
 
   /** A point inside the collision box that lies behind the given weak-spot plate. */
-  weakSpotPoint(zone: ArmorZone): THREE.Vector3 {
+  weakSpotPoint(key: WeakKey | ArmorZone): THREE.Vector3 {
     const d = this.dims;
     const f = this.forward;
+    // local +x in world space (forward = (sin, cos) -> +x = (cos, -sin))
+    const right = new THREE.Vector3(f.z, 0, -f.x);
     const p = this.pos.clone();
-    if (zone === 'lowerFront') return p.addScaledVector(f, d.L / 2 - 0.2).setY(this.pos.y + d.H * 0.2);
-    if (zone === 'rear') return p.addScaledVector(f, -(d.L / 2 - 0.2)).setY(this.pos.y + d.H * 0.6);
-    // cupola: top of the turret
-    return p.addScaledVector(f, d.tZ).setY(this.pos.y + d.H * 0.95 + d.tH * 0.85);
+    switch (key) {
+      case 'lowerFront':
+        return p.addScaledVector(f, d.L / 2 - 0.2).setY(this.pos.y + d.H * 0.2);
+      case 'rear':
+        return p.addScaledVector(f, -(d.L / 2 - 0.2)).setY(this.pos.y + d.H * 0.35);
+      case 'fuelL':
+      case 'fuel':
+        return p.addScaledVector(f, -d.L * 0.38).addScaledVector(right, -(d.W / 2 - 0.2)).setY(this.pos.y + d.H * 0.72);
+      case 'fuelR':
+        return p.addScaledVector(f, -d.L * 0.38).addScaledVector(right, d.W / 2 - 0.2).setY(this.pos.y + d.H * 0.72);
+      case 'loader':
+      case 'turretRear': {
+        const tf = new THREE.Vector3(Math.sin(this.turretYaw), 0, Math.cos(this.turretYaw));
+        return p.addScaledVector(f, d.tZ).addScaledVector(tf, -(d.tL / 2 - 0.15)).setY(this.pos.y + d.H * 0.95 + d.tH * 0.45);
+      }
+      default:
+        // cupola: top of the turret
+        return p.addScaledVector(f, d.tZ).setY(this.pos.y + d.H * 0.95 + d.tH * 0.85);
+    }
   }
 
   /** Plate thickness of a zone. Lower front and cupola are thin weak spots. */
@@ -309,6 +405,7 @@ export class Tank {
       case 'turretSide': return t.side;
       case 'turretRear': return t.rear;
       case 'cupola': return t.side * 0.5;
+      case 'fuel': return h.rear * 0.9;
     }
   }
 
@@ -335,12 +432,14 @@ export class Tank {
       const t = rayBox(lox, origin.y - this.pos.y, loz, ldx, dir.y, ldz, -b.hw, b.y0, -b.hl, b.hw, b.y1, b.hl, maxT, n);
       if (t < 0 || (best && t >= best.t)) continue;
       const localY = origin.y - this.pos.y + dir.y * t;
+      const localZ = loz + ldz * t;
       let zone: ArmorZone;
       if (b.part === 'hull') {
         if (n.y > 0.5) zone = 'roof';
         else if (n.z > 0.5) zone = localY < d.H * 0.4 ? 'lowerFront' : 'upperFront';
-        else if (n.z < -0.5) zone = 'rear';
-        else zone = localY < d.H * 0.45 ? 'track' : 'side';
+        else if (n.z < -0.5) zone = localY > d.H * 0.55 ? 'fuel' : 'rear';
+        else if (localY < d.H * 0.45) zone = 'track';
+        else zone = localZ < -b.hl * 0.5 ? 'fuel' : 'side';
       } else {
         const top = localY > b.y1 - d.tH * 0.3;
         if (n.y > 0.5 || (top && n.z > -0.5)) zone = 'cupola';
@@ -366,13 +465,24 @@ export class Tank {
     if (!this.alive) return false;
     this.hp -= amount;
     this.lastHitBy = from;
-    if (from && from.spec.team !== this.spec.team) from.damageDealt += Math.min(amount, amount + this.hp);
+    const enemy = !!from && from.spec.team !== this.spec.team;
+    if (from && enemy) {
+      from.damageDealt += Math.min(amount, amount + this.hp);
+      this.damageLog.set(from, this.time);
+    }
     if (this.hp <= 0) {
       this.hp = 0;
       this.alive = false;
       this.speed = 0;
+      this.burnTimer = 0;
       setDestroyedLook(this.model);
-      if (from && from !== this) from.kills += 1;
+      // Kill goes to the enemy that dealt the final damage (or the last one who hit us, e.g. after a wall crash);
+      // anyone else who hurt us recently gets an assist.
+      const killer = enemy ? from : [...this.damageLog.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+      if (killer) killer.kills += 1;
+      for (const [t, when] of this.damageLog) {
+        if (t !== killer && this.time - when <= ASSIST_WINDOW) t.assists += 1;
+      }
       return true;
     }
     return false;
