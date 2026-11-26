@@ -36,6 +36,12 @@ export interface TankModel {
   divine: boolean;
   /** Weak-spot overlays, shown to the player while zoomed. */
   weak: Record<WeakZone, THREE.Mesh>;
+  /** Part of the gun that slides back on recoil. */
+  recoil?: THREE.Object3D;
+  /** Electric shield dome (hidden unless the tank has a shield). */
+  shield?: THREE.Mesh;
+  /** Track meshes per side (local -x = left, +x = right), hidden when the track breaks. */
+  tracks: { left: THREE.Object3D[]; right: THREE.Object3D[] };
   /** Track animation (GLB models only). */
   anim?: { mixer: THREE.AnimationMixer; fwd: THREE.AnimationAction; back: THREE.AnimationAction; left: THREE.AnimationAction; right: THREE.AnimationAction };
 }
@@ -74,7 +80,40 @@ function addTrimAndWeak(body: THREE.Group, turret: THREE.Group, d: TankDims, tri
   const cupola = weakMesh(d.tW * 0.6, d.tH * 0.32, d.tL * 0.6);
   cupola.position.set(0, d.tH * 0.86, -d.tL * 0.05);
   turret.add(cupola);
-  return { lowerFront, rear, cupola };
+  const loader = weakMesh(d.tW * 0.7, d.tH * 0.5, 0.12);
+  loader.position.set(0, d.tH * 0.45, -d.tL / 2 - 0.06);
+  turret.add(loader);
+  const fuelL = weakMesh(0.12, d.H * 0.4, d.L * 0.22);
+  fuelL.position.set(-d.W / 2 - 0.06, d.H * 0.72, -d.L * 0.38);
+  body.add(fuelL);
+  const fuelR = weakMesh(0.12, d.H * 0.4, d.L * 0.22);
+  fuelR.position.set(d.W / 2 + 0.06, d.H * 0.72, -d.L * 0.38);
+  body.add(fuelR);
+  return { lowerFront, rear, cupola, loader, fuelL, fuelR };
+}
+
+/** Electric shield: a wireframe dome plus a faint shell, additive so it glows. */
+function shieldDome(d: TankDims): THREE.Mesh {
+  const r = Math.max(d.L, d.W) * 0.62;
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x66e0ff, transparent: true, opacity: 0, wireframe: true,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const dome = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 2), mat);
+  const shell = new THREE.Mesh(
+    new THREE.SphereGeometry(r * 0.99, 24, 16),
+    new THREE.MeshBasicMaterial({ color: 0x2a8cff, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending, depthWrite: false }),
+  );
+  dome.add(shell);
+  // the shell follows the dome's opacity
+  shell.onBeforeRender = () => {
+    (shell.material as THREE.MeshBasicMaterial).opacity = mat.opacity * 0.35;
+  };
+  dome.scale.y = 0.7;
+  dome.position.y = d.H * 0.6;
+  dome.visible = false;
+  dome.renderOrder = 6;
+  return dome;
 }
 
 /** Builds a tank from the CC0 GLB model, painted in the nation's colors. */
@@ -122,6 +161,16 @@ function buildGlbModel(nation: Nation, cls: TankClass, rarity: Rarity): TankMode
   const rc = RARITY_INFO[rarity].color;
   const trim = new THREE.MeshBasicMaterial({ color: rarity === 'divine' ? 0xffffff : new THREE.Color(rc) });
   const weak = addTrimAndWeak(body, turret, d, trim);
+  const shield = shieldDome(d);
+  root.add(shield);
+  const recoil = gun.children.find((c) => c !== muzzle);
+  const tracks = { left: [] as THREE.Object3D[], right: [] as THREE.Object3D[] };
+  body.traverse((o) => {
+    if (o.name.toLowerCase().startsWith('trackmesh')) {
+      const c = new THREE.Box3().setFromObject(o, false).getCenter(new THREE.Vector3());
+      (c.x < 0 ? tracks.left : tracks.right).push(o);
+    }
+  });
 
   const mixer = new THREE.AnimationMixer(body);
   const clip = (n: string) => inst.clips.find((c) => c.name.includes(n));
@@ -133,7 +182,7 @@ function buildGlbModel(nation: Nation, cls: TankClass, rarity: Rarity): TankMode
     return a;
   };
   const anim = { mixer, fwd: act('Forward'), back: act('Backwards'), left: act('TurningLeft'), right: act('TurningRight') };
-  return { root, body, turret, gun, muzzle, trim, paint, divine: rarity === 'divine', weak, anim };
+  return { root, body, turret, gun, muzzle, trim, paint, divine: rarity === 'divine', weak, anim, recoil, shield, tracks };
 }
 
 /** Blend track animations by speed and turning. */
@@ -149,7 +198,7 @@ export function updateTrackAnim(m: TankModel, speed: number, turn: number, dt: n
   a.mixer.update(dt * (0.5 + k));
 }
 
-export type WeakZone = 'lowerFront' | 'rear' | 'cupola';
+export type WeakZone = 'lowerFront' | 'rear' | 'cupola' | 'loader' | 'fuelL' | 'fuelR';
 
 function weakMesh(w: number, h: number, d: number): THREE.Mesh {
   const m = new THREE.Mesh(
@@ -199,9 +248,12 @@ function buildBoxModel(nation: Nation, cls: TankClass, rarity: Rarity): TankMode
   // Tracks
   const trackW = d.W * 0.24;
   const trackH = d.H * 0.75;
+  const tracks = { left: [] as THREE.Object3D[], right: [] as THREE.Object3D[] };
   for (const s of [-1, 1]) {
     const x = s * (d.W / 2 - trackW / 2);
-    body.add(box(trackW, trackH, d.L, darkMat, x, trackH / 2, 0));
+    const tr = box(trackW, trackH, d.L, darkMat, x, trackH / 2, 0);
+    body.add(tr);
+    (s < 0 ? tracks.left : tracks.right).push(tr);
     // wheels
     const n = cls === 'mobile' ? 4 : 5;
     for (let i = 0; i < n; i++) {
@@ -262,30 +314,25 @@ function buildBoxModel(nation: Nation, cls: TankClass, rarity: Rarity): TankMode
   const gun = new THREE.Group();
   gun.position.set(0, d.tH * 0.55, cls === 'artillery' ? d.tL * 0.3 : d.tL / 2);
   turret.add(gun);
+  const recoil = new THREE.Group();
+  gun.add(recoil);
   const barrel = new THREE.Mesh(new THREE.CylinderGeometry(d.barrelR, d.barrelR * 1.15, d.barrel, 10), metalMat);
   barrel.rotation.x = Math.PI / 2;
   barrel.position.z = d.barrel / 2;
-  gun.add(barrel);
+  recoil.add(barrel);
   const mantlet = box(d.barrelR * 4, d.barrelR * 4, 0.6, paint2, 0, 0, 0.2);
   gun.add(mantlet);
   const brake = new THREE.Mesh(new THREE.CylinderGeometry(d.barrelR * 1.6, d.barrelR * 1.6, 0.5, 8), metalMat);
   brake.rotation.x = Math.PI / 2;
   brake.position.z = d.barrel - 0.1;
-  gun.add(brake);
+  recoil.add(brake);
   const muzzle = new THREE.Object3D();
   muzzle.position.z = d.barrel + 0.3;
   gun.add(muzzle);
 
-  // Weak spots: thin lower front plate, engine deck at the rear, commander cupola.
-  const lowerFront = weakMesh(d.W * 0.86, d.H * 0.36, 0.12);
-  lowerFront.position.set(0, d.H * 0.2, d.L / 2 + 0.05);
-  body.add(lowerFront);
-  const rear = weakMesh(d.W * 0.8, d.H * 0.5, 0.12);
-  rear.position.set(0, d.H * 0.45, -d.L / 2 - 0.05);
-  body.add(rear);
-  const cupola = weakMesh(d.tW * 0.6, d.tH * 0.32, d.tL * 0.6);
-  cupola.position.set(-d.tW * 0.12, d.tH * 0.86, -d.tL * 0.05);
-  turret.add(cupola);
+  const weak = addTrimAndWeak(body, turret, d, trim);
+  const shield = shieldDome(d);
+  root.add(shield);
 
   root.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) o.castShadow = true;
@@ -293,7 +340,7 @@ function buildBoxModel(nation: Nation, cls: TankClass, rarity: Rarity): TankMode
 
   return {
     root, body, turret, gun, muzzle, trim, paint: [paint, paint2], divine: rarity === 'divine',
-    weak: { lowerFront, rear, cupola },
+    weak, recoil, shield, tracks,
   };
 }
 

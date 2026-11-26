@@ -1,6 +1,36 @@
 import * as THREE from 'three';
 
-export const ARENA_HALF = 100;
+/** Half the arena's side length; changes with the game mode (see generateMap). */
+export let ARENA_HALF = 100;
+
+export type TeamSize = 4 | 8 | 12;
+
+export interface MapInfo {
+  teamSize: TeamSize;
+  half: number;
+  seed: number;
+  theme: MapTheme;
+}
+
+export interface MapTheme {
+  name: string;
+  ground: string;
+  grid: string;
+  neon: number;
+  neon2: number;
+  fog: number;
+  sky: number;
+}
+
+const THEMES: MapTheme[] = [
+  { name: 'Neon Şehir', ground: '#26324e', grid: 'rgba(60,140,255,', neon: 0x33aaff, neon2: 0xff3d7f, fog: 0x0a1024, sky: 0x070b18 },
+  { name: 'Çöl Üssü', ground: '#4a3a2a', grid: 'rgba(255,170,60,', neon: 0xffa23a, neon2: 0x33d6ff, fog: 0x1c120a, sky: 0x120b07 },
+  { name: 'Zehirli Bölge', ground: '#243a2c', grid: 'rgba(90,255,140,', neon: 0x5dff8a, neon2: 0xd24bff, fog: 0x08160d, sky: 0x050d08 },
+  { name: 'Buz Limanı', ground: '#2c3e4e', grid: 'rgba(180,230,255,', neon: 0xbfeaff, neon2: 0x3a8bff, fog: 0x0d1820, sky: 0x08101a },
+];
+
+/** Arena half-size per team size: bigger battles get bigger maps. */
+export const MODE_HALF: Record<TeamSize, number> = { 4: 85, 8: 120, 12: 150 };
 
 interface Hill {
   x: number;
@@ -9,15 +39,8 @@ interface Hill {
   h: number;
 }
 
-/** Hills come in point-symmetric pairs so both spawns are equal. */
-const HALF_HILLS: Hill[] = [
-  { x: -52, z: -18, r: 20, h: 6 },
-  { x: -62, z: 58, r: 15, h: 4.5 },
-  { x: 26, z: -38, r: 12, h: 3.2 },
-  { x: -8, z: -62, r: 10, h: 2 },
-];
-const HILLS: Hill[] = [{ x: 0, z: 0, r: 17, h: 4 }];
-for (const h of HALF_HILLS) HILLS.push(h, { ...h, x: -h.x, z: -h.z });
+const HILLS: Hill[] = [];
+export let MAP: MapInfo = { teamSize: 4, half: 100, seed: 1, theme: THEMES[0] };
 
 export function heightAt(x: number, z: number): number {
   let y = 0;
@@ -56,21 +79,6 @@ interface Def {
   kind?: Obstacle['kind'];
 }
 
-const HALF_OBSTACLES: Def[] = [
-  { x: -15, z: 0, w: 3, d: 14, h: 3.2, kind: 'wall' },
-  { x: -36, z: -50, w: 14, d: 10, h: 9 },
-  { x: -74, z: -12, w: 10, d: 22, h: 8 },
-  { x: 30, z: -66, w: 18, d: 4, h: 3, kind: 'low' },
-  { x: -30, z: -68, w: 12, d: 4, h: 3, kind: 'low' },
-  { x: 76, z: -34, w: 8, d: 14, h: 7 },
-  { x: -8, z: -30, w: 12, d: 3, h: 2.6, kind: 'low' },
-  { x: 46, z: -8, w: 7, d: 7, h: 6 },
-  { x: 60, z: -72, w: 10, d: 10, h: 10 },
-  { x: -54, z: -78, w: 8, d: 8, h: 6 },
-  { x: 16, z: -18, w: 4, d: 4, h: 2.4, kind: 'low' },
-  { x: -84, z: 40, w: 6, d: 18, h: 5 },
-];
-
 function makeObstacle(d: Def): Obstacle {
   const minX = d.x - d.w / 2;
   const maxX = d.x + d.w / 2;
@@ -90,9 +98,87 @@ function makeObstacle(d: Def): Obstacle {
 }
 
 export const OBSTACLES: Obstacle[] = [];
-for (const d of HALF_OBSTACLES) {
-  OBSTACLES.push(makeObstacle(d), makeObstacle({ ...d, x: -d.x, z: -d.z }));
+
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
+
+/** Distance from the back wall kept free for spawning. */
+export const SPAWN_DEPTH = 24;
+
+/**
+ * Builds a new random, point-symmetric map for the team size (both sides get the same terrain).
+ * Bigger modes get a bigger arena with proportionally more hills and cover.
+ */
+export function generateMap(teamSize: TeamSize, seed = Math.floor(Math.random() * 1e9)): MapInfo {
+  const r = rng(seed);
+  const half = MODE_HALF[teamSize];
+  ARENA_HALF = half;
+  const area = (half / 100) ** 2;
+  const theme = THEMES[Math.floor(r() * THEMES.length)];
+
+  HILLS.length = 0;
+  HILLS.push({ x: 0, z: 0, r: 14 + r() * 8, h: 2 + r() * 3 });
+  const hillPairs = Math.round(4 * area + r() * 2);
+  for (let i = 0; i < hillPairs; i++) {
+    const h: Hill = {
+      x: (r() * 2 - 1) * (half - 20),
+      z: (r() * 2 - 1) * (half - SPAWN_DEPTH - 10),
+      r: 10 + r() * 14,
+      h: 1.5 + r() * 5,
+    };
+    HILLS.push(h, { ...h, x: -h.x, z: -h.z });
+  }
+
+  OBSTACLES.length = 0;
+  const placed: Def[] = [];
+  const pairs = Math.round(13 * area);
+  let tries = 0;
+  while (placed.length < pairs && tries++ < pairs * 40) {
+    const kindRoll = r();
+    const kind: Obstacle['kind'] = kindRoll < 0.45 ? 'block' : kindRoll < 0.7 ? 'wall' : 'low';
+    let w: number;
+    let d: number;
+    let h: number;
+    if (kind === 'block') {
+      w = 6 + r() * 10;
+      d = 6 + r() * 10;
+      h = 5 + r() * 7;
+    } else if (kind === 'wall') {
+      w = 2.5 + r();
+      d = 10 + r() * 14;
+      h = 3 + r() * 1.5;
+    } else {
+      w = 8 + r() * 8;
+      d = 3;
+      h = 2.4 + r() * 0.6;
+    }
+    if (r() < 0.5) [w, d] = [d, w];
+    const x = (r() * 2 - 1) * (half - 12 - w / 2);
+    const z = -(r() * (half - SPAWN_DEPTH - d / 2));
+    // keep the very center and spawn rows open, and leave lanes between obstacles
+    if (Math.abs(x) < 8 && Math.abs(z) < 8) continue;
+    const clash = placed.some(
+      (o) => Math.abs(o.x - x) < (o.w + w) / 2 + 9 && Math.abs(o.z - z) < (o.d + d) / 2 + 9,
+    );
+    const clashMirror = Math.abs(x) < w / 2 + 9 && Math.abs(z) < d / 2 + 9; // too close to its own mirror
+    if (clash || clashMirror) continue;
+    placed.push({ x, z, w, d, h, kind });
+  }
+  for (const d of placed) OBSTACLES.push(makeObstacle(d), makeObstacle({ ...d, x: -d.x, z: -d.z }));
+
+  MAP = { teamSize, half, seed, theme };
+  return MAP;
+}
+
+generateMap(4, 1);
 
 export interface RayHit {
   t: number;
@@ -263,10 +349,10 @@ function gridTexture(): THREE.CanvasTexture {
     g.fillStyle = `rgba(${v},${v + 8},${v + 22},0.5)`;
     g.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
   }
-  g.strokeStyle = 'rgba(60,140,255,0.35)';
+  g.strokeStyle = MAP.theme.grid + '0.35)';
   g.lineWidth = 2;
   g.strokeRect(1, 1, 254, 254);
-  g.strokeStyle = 'rgba(60,140,255,0.12)';
+  g.strokeStyle = MAP.theme.grid + '0.12)';
   g.lineWidth = 1;
   g.beginPath();
   g.moveTo(128, 0);
@@ -276,7 +362,7 @@ function gridTexture(): THREE.CanvasTexture {
   g.stroke();
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(25, 25);
+  t.repeat.set(Math.round(ARENA_HALF / 4), Math.round(ARENA_HALF / 4));
   t.anisotropy = 4;
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -307,8 +393,8 @@ function windowTexture(seed: number): THREE.CanvasTexture {
 }
 
 export function buildWorld(scene: THREE.Scene): void {
-  scene.background = new THREE.Color(0x070b18);
-  scene.fog = new THREE.Fog(0x0a1024, 90, 260);
+  scene.background = new THREE.Color(MAP.theme.sky);
+  scene.fog = new THREE.Fog(MAP.theme.fog, ARENA_HALF * 0.9, ARENA_HALF * 2.6);
 
   const hemi = new THREE.HemisphereLight(0xa8c4ff, 0x3a3040, 2.2);
   scene.add(hemi);
@@ -318,7 +404,7 @@ export function buildWorld(scene: THREE.Scene): void {
 
   // Terrain
   const size = ARENA_HALF * 2 + 60;
-  const geo = new THREE.PlaneGeometry(size, size, 110, 110);
+  const geo = new THREE.PlaneGeometry(size, size, Math.round(size / 2.4), Math.round(size / 2.4));
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
@@ -334,8 +420,8 @@ export function buildWorld(scene: THREE.Scene): void {
   // Obstacles
   const blockMat = new THREE.MeshStandardMaterial({ color: 0x3a4560, roughness: 0.75, metalness: 0.1 });
   const lowMat = new THREE.MeshStandardMaterial({ color: 0x76604a, roughness: 0.85, metalness: 0.05 });
-  const neon = new THREE.MeshBasicMaterial({ color: 0x33aaff });
-  const neonPink = new THREE.MeshBasicMaterial({ color: 0xff3d7f });
+  const neon = new THREE.MeshBasicMaterial({ color: MAP.theme.neon });
+  const neonPink = new THREE.MeshBasicMaterial({ color: MAP.theme.neon2 });
   OBSTACLES.forEach((o, i) => {
     const w = o.maxX - o.minX;
     const d = o.maxZ - o.minZ;
@@ -351,7 +437,7 @@ export function buildWorld(scene: THREE.Scene): void {
 
   // Boundary walls with neon strip
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x2a3552, roughness: 0.6, metalness: 0.1 });
-  const stripMat = new THREE.MeshBasicMaterial({ color: 0x2f8cff });
+  const stripMat = new THREE.MeshBasicMaterial({ color: MAP.theme.neon });
   for (let i = 0; i < 4; i++) {
     const horiz = i < 2;
     const s = i % 2 === 0 ? -1 : 1;
@@ -368,7 +454,7 @@ export function buildWorld(scene: THREE.Scene): void {
   const towerGeo = new THREE.BoxGeometry(1, 1, 1);
   for (let i = 0; i < 70; i++) {
     const ang = (i / 70) * Math.PI * 2 + Math.random() * 0.05;
-    const dist = 150 + Math.random() * 70;
+    const dist = ARENA_HALF * 1.5 + Math.random() * 70;
     const w = 10 + Math.random() * 16;
     const h = 25 + Math.random() * 80;
     const tex = windowTexture(i * 977 + 13);

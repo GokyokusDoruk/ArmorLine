@@ -121,9 +121,11 @@ export interface TankStats {
   frontRicochet: number;
   /** Mass factor used for ramming and wall impacts. */
   mass: number;
+  /** Electric shield: max share of damage it can stop when fully charged (0 = no shield). */
+  shieldPower: number;
 }
 
-const BASE: Record<TankClass, TankStats> = {
+const BASE: Record<TankClass, Omit<TankStats, 'shieldPower'>> = {
   heavy: {
     hp: 2000, damage: 320, pen: 190, reload: 6.5, magazine: 1, clipInterval: 0,
     hullArmor: { front: 160, side: 95, rear: 60 },
@@ -207,12 +209,87 @@ export function baseTankStats(nation: Nation, cls: TankClass, rarity: Rarity): T
     dispersion: b.dispersion * n.accuracy,
     aimTime: b.aimTime * n.accuracy,
     gunDepression: b.gunDepression * n.gunDepression,
+    shieldPower: 0,
   };
-  if (nation === 'france' && cls !== 'artillery') {
-    // Autoloader: several quick shots, then a long magazine reload.
-    s.magazine = cls === 'sniper' ? 3 : 4;
-    s.clipInterval = cls === 'sniper' ? 1.6 : 1.1;
-    s.reload = s.reload * 2.6;
-  }
   return s;
+}
+
+// ---------------------------------------------------------------- weapons
+
+export const WEAPONS = ['heavy', 'standard', 'rapid', 'clip'] as const;
+export type WeaponId = (typeof WEAPONS)[number];
+
+export interface WeaponInfo {
+  id: WeaponId;
+  name: string;
+  desc: string;
+}
+
+export const WEAPON_INFO: Record<WeaponId, WeaponInfo> = {
+  heavy: { id: 'heavy', name: 'Ağır Top', desc: 'Uzun dolum, çok güçlü atış.' },
+  standard: { id: 'standard', name: 'Standart Top', desc: 'Orta dolum, orta hasar.' },
+  rapid: { id: 'rapid', name: 'Hızlı Top', desc: 'Kısa dolum, düşük hasar.' },
+  clip: { id: 'clip', name: 'Şarjörlü Top', desc: '4 mermi art arda, sonra uzun şarjör dolumu.' },
+};
+
+/** France's autoloader tradition: their clip guns cycle faster. */
+export function defaultWeapon(nation: Nation): WeaponId {
+  return nation === 'france' ? 'clip' : 'standard';
+}
+
+export function applyWeapon(s: TankStats, w: WeaponId, nation: Nation): TankStats {
+  const o: TankStats = { ...s, hullArmor: { ...s.hullArmor }, turretArmor: { ...s.turretArmor } };
+  switch (w) {
+    case 'heavy':
+      o.damage *= 1.55;
+      o.pen *= 1.12;
+      o.reload *= 1.65;
+      o.aimTime *= 1.15;
+      o.shellSpeed *= 0.95;
+      break;
+    case 'standard':
+      break;
+    case 'rapid':
+      o.damage *= 0.55;
+      o.pen *= 0.9;
+      o.reload *= 0.45;
+      o.dispersion *= 1.15;
+      o.aimTime *= 0.85;
+      break;
+    case 'clip': {
+      const fr = nation === 'france';
+      o.damage *= 0.6;
+      o.magazine = 4;
+      o.clipInterval = (s.splash > 0 ? 2.2 : 0.9) * (fr ? 0.8 : 1);
+      o.reload *= fr ? 2.1 : 2.6;
+      break;
+    }
+  }
+  return o;
+}
+
+// ---------------------------------------------------------------- levels
+
+export const MAX_LEVEL = 1000;
+
+/** Coins to go from `level` to `level + 1`. */
+export function upgradeCost(level: number): number {
+  return Math.round(40 * Math.pow(level, 1.3) + 60);
+}
+
+/** Each level adds a little to everything; level 1000 is about +80% core stats. */
+export function applyLevel(s: TankStats, level: number): TankStats {
+  const k = 1 + (Math.max(1, level) - 1) * 0.0008;
+  const m = 1 + (Math.max(1, level) - 1) * 0.0002;
+  return {
+    ...s,
+    hp: s.hp * k,
+    damage: s.damage * k,
+    pen: s.pen * (1 + (k - 1) * 0.6),
+    reload: s.reload / (1 + (k - 1) * 0.4),
+    hullArmor: { front: s.hullArmor.front * k, side: s.hullArmor.side * k, rear: s.hullArmor.rear * k },
+    turretArmor: { front: s.turretArmor.front * k, side: s.turretArmor.side * k, rear: s.turretArmor.rear * k },
+    speed: s.speed * m,
+    view: s.view * m,
+  };
 }

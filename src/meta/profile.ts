@@ -1,5 +1,5 @@
 import { RARITY_INFO, rollRarity, type Rarity } from '../data/rarity';
-import { CLASSES, NATIONS, baseTankStats, type Nation, type TankClass, type TankStats } from '../data/tanks';
+import { CLASSES, MAX_LEVEL, NATIONS, applyLevel, applyWeapon, baseTankStats, defaultWeapon, upgradeCost, type Nation, type TankClass, type TankStats, type WeaponId } from '../data/tanks';
 import { SLOTS, applyParts, type Part, type Slot } from '../data/parts';
 
 export interface OwnedTank {
@@ -8,6 +8,9 @@ export interface OwnedTank {
   cls: TankClass;
   rarity: Rarity;
   equipped: Partial<Record<Slot, string>>;
+  /** 1..1000, raised with coins. */
+  level?: number;
+  weapon?: WeaponId;
 }
 
 export interface Profile {
@@ -86,8 +89,38 @@ export function equippedParts(p: Profile, t: OwnedTank): Part[] {
   return out;
 }
 
+export function tankLevel(t: OwnedTank): number {
+  return t.level ?? 1;
+}
+
+export function tankWeapon(t: OwnedTank): WeaponId {
+  return t.weapon ?? defaultWeapon(t.nation);
+}
+
 export function tankStats(p: Profile, t: OwnedTank): TankStats {
-  return applyParts(baseTankStats(t.nation, t.cls, t.rarity), equippedParts(p, t));
+  const base = applyLevel(baseTankStats(t.nation, t.cls, t.rarity), tankLevel(t));
+  return applyParts(applyWeapon(base, tankWeapon(t), t.nation), equippedParts(p, t));
+}
+
+/** Total coins to raise a tank by `steps` levels (capped at MAX_LEVEL). */
+export function upgradeTotal(t: OwnedTank, steps: number): { steps: number; cost: number } {
+  let lv = tankLevel(t);
+  let cost = 0;
+  let n = 0;
+  while (n < steps && lv < MAX_LEVEL) {
+    cost += upgradeCost(lv);
+    lv++;
+    n++;
+  }
+  return { steps: n, cost };
+}
+
+export function upgradeTank(p: Profile, t: OwnedTank, steps: number): boolean {
+  const u = upgradeTotal(t, steps);
+  if (u.steps === 0 || p.coins < u.cost) return false;
+  p.coins -= u.cost;
+  t.level = tankLevel(t) + u.steps;
+  return true;
 }
 
 /** Which tank (if any) has this part equipped. */

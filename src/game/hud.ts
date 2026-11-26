@@ -4,6 +4,7 @@ import { NATION_INFO } from '../data/tanks';
 import type { Tank } from './tank';
 import { ARENA_HALF, OBSTACLES } from './world';
 import { chanceColor } from './armor';
+import { scoreboardHtml, type ScoreRow } from './scoreboard';
 
 export interface HudFrame {
   timeLeft: number;
@@ -53,6 +54,9 @@ export class Hud {
   private ammo: HTMLDivElement;
   private status: HTMLDivElement;
   private modules: HTMLDivElement;
+  private shieldBar: HTMLDivElement;
+  readonly scoreBtn: HTMLDivElement;
+  private board: HTMLDivElement;
   private reloadBar: HTMLDivElement;
   private reticle: HTMLDivElement;
   private reticleText: HTMLDivElement;
@@ -85,6 +89,7 @@ export class Hud {
         <div class="modules"></div>
         <div class="status"></div>
         <div class="reload"><div></div></div>
+        <div class="shield-bar"><div></div></div>
         <div class="hp"><div class="hp-fill"></div><div class="hp-text"></div></div>
         <div class="ammo"></div>
       </div>
@@ -92,6 +97,8 @@ export class Hud {
       <div class="btn zoom-btn">🔭</div>
       <div class="btn arty-btn">🎯</div>
       <div class="btn menu-btn">☰</div>
+      <div class="btn score-btn">📋</div>
+      <div class="scoreboard hidden"></div>
       <div class="vignette"></div>
       <div class="dead-panel hidden"></div>
     `;
@@ -107,6 +114,9 @@ export class Hud {
     this.ammo = q('.ammo');
     this.status = q('.status');
     this.modules = q('.modules');
+    this.shieldBar = q('.shield-bar > div');
+    this.scoreBtn = q('.score-btn');
+    this.board = q('.scoreboard');
     this.reloadBar = q('.reload > div');
     this.reticle = q('.reticle');
     this.reticleText = q('.ret-text');
@@ -180,6 +190,15 @@ export class Hud {
     let mods = '';
     if (p.trackedTimer > 0) mods += `<span class="mod">⛓️ PALET HASARLI ${p.trackedTimer.toFixed(1)}s</span>`;
     if (p.engineDamaged) mods += `<span class="mod">⚙️ MOTOR HASARLI</span>`;
+    if (p.burnTimer > 0) mods += `<span class="mod fire">🔥 YANIYOR ${p.burnTimer.toFixed(1)}s</span>`;
+    if (p.loaderDamaged) mods += `<span class="mod">🔧 DOLUM HASARLI</span>`;
+    if (p.stats.shieldPower > 0) {
+      this.shieldBar.parentElement!.style.display = 'block';
+      this.shieldBar.style.width = `${p.shieldCharge * 100}%`;
+      this.shieldBar.parentElement!.classList.toggle('full', p.shieldCharge >= 1);
+    } else {
+      this.shieldBar.parentElement!.style.display = 'none';
+    }
     if (this.modules.innerHTML !== mods) this.modules.innerHTML = mods;
 
     // Name tags
@@ -320,6 +339,17 @@ export class Hud {
     this.feed.prepend(el);
     while (this.feed.children.length > 4) this.feed.lastElementChild?.remove();
     setTimeout(() => el.remove(), 5000);
+  }
+
+  /** Live scoreboard (toggle with the 📋 button or hold Tab). */
+  toggleScoreboard(rows: () => ScoreRow[], force?: boolean): void {
+    const show = force ?? this.board.classList.contains('hidden');
+    this.board.classList.toggle('hidden', !show);
+    if (show) this.board.innerHTML = scoreboardHtml(rows());
+  }
+
+  refreshScoreboard(rows: ScoreRow[]): void {
+    if (!this.board.classList.contains('hidden')) this.board.innerHTML = scoreboardHtml(rows);
   }
 
   flashHit(): void {

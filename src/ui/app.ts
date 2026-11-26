@@ -1,14 +1,16 @@
 import * as THREE from 'three';
 import { RARITIES, RARITY_INFO, rarityChances, rarityCss, rarityIndex, type Rarity } from '../data/rarity';
-import { CLASSES, CLASS_INFO, NATIONS, NATION_INFO, TANK_NAMES, type Nation, type TankClass, type TankStats } from '../data/tanks';
+import { CLASSES, CLASS_INFO, MAX_LEVEL, NATIONS, NATION_INFO, TANK_NAMES, WEAPONS, WEAPON_INFO, type Nation, type TankClass, type TankStats, type WeaponId } from '../data/tanks';
 import { OPTIC_ERROR, SLOTS, SLOT_INFO, partEffects, partName, type Part, type Slot } from '../data/parts';
 import {
   equipPart, grantStarterTanks, loadProfile, partOwner, resetProfile, saveProfile, selectedTank,
-  sellPart, sellValue, tankStats, unequipSlot, type OwnedTank, type Profile,
+  sellPart, sellValue, tankLevel, tankStats, tankWeapon, unequipSlot, upgradeTank, upgradeTotal, type OwnedTank, type Profile,
 } from '../meta/profile';
-import { applyReward, rollRewards, DROP_CHANCE, type BattleReward } from '../meta/rewards';
+import { applyReward, rollRewards, COINS_PER_ASSIST, COINS_PER_DAMAGE, COINS_PER_KILL, DROP_CHANCE, type BattleReward } from '../meta/rewards';
 import { buyOffer, msUntilRefresh, shopOffers } from '../meta/shop';
 import { Battle, type BattleResult } from '../game/battle';
+import { scoreboardHtml } from '../game/scoreboard';
+import type { TeamSize } from '../game/world';
 import { isMuted, setMuted, sfx, unlockAudio } from '../game/audio';
 import { GaragePreview } from './preview';
 import { loadTankModels } from '../game/models';
@@ -29,6 +31,9 @@ function tankImg(n: Nation, c: TankClass): string {
   return TANK_IMAGES[`../assets/tanks/${n}-${c}.jpg`] ?? '';
 }
 
+const WEAPON_ICON: Record<WeaponId, string> = { heavy: '🔨', standard: '🎯', rapid: '⚡', clip: '🔁' };
+const WEAPON_SHORT: Record<WeaponId, string> = { heavy: 'Ağır', standard: 'Standart', rapid: 'Hızlı', clip: 'Şarjör' };
+
 function coins(n: number): string {
   return `<span class="coin">◈</span> ${Math.floor(n).toLocaleString('tr-TR')}`;
 }
@@ -43,6 +48,7 @@ export class App {
   private shopTimer = 0;
   private quality: 'high' | 'low';
   private tankFilter: Nation | 'all' = 'all';
+  private teamSize: TeamSize = (Number(localStorage.getItem('armorline.mode')) as TeamSize) || 4;
 
   constructor(private renderer: THREE.WebGLRenderer, private ui: HTMLElement) {
     this.profile = loadProfile();
@@ -151,7 +157,7 @@ export class App {
               <button class="tank-card ${x.id === t.id ? 'sel' : ''}" data-t="${x.id}" style="--rc:${rarityCss(x.rarity)}">
                 <img class="tc-img" src="${tankImg(x.nation, x.cls)}" alt="" loading="lazy">
                 <span class="tc-name">${TANK_NAMES[x.nation][x.cls]}</span>
-                <span class="tc-cls">${CLASS_INFO[x.cls].short}</span>
+                <span class="tc-cls">${CLASS_INFO[x.cls].short} · Sv.${tankLevel(x)}</span>
               </button>`;
     const winRate = p.stats.battles ? Math.round((p.stats.wins / p.stats.battles) * 100) : 0;
 
@@ -169,11 +175,23 @@ export class App {
           <div class="tname">${NATION_INFO[t.nation].flag} ${TANK_NAMES[t.nation][t.cls]}</div>
           <div class="tmeta">${rarityBadge(t.rarity)} <span class="cls">${CLASS_INFO[t.cls].name}</span> <span class="nat">${NATION_INFO[t.nation].name}</span></div>
           <div class="trole">${CLASS_INFO[t.cls].role}</div>
+          <div class="tlevel">Seviye <b>${tankLevel(t)}</b><small>/${MAX_LEVEL}</small></div>
         </div>
 
         <div class="garage-bottom">
           <div class="slots">
             ${SLOTS.map((s) => this.slotHtml(t, s)).join('')}
+          </div>
+          <div class="weapon-row">
+            ${WEAPONS.map((w) => `<button class="wchip ${tankWeapon(t) === w ? 'on' : ''}" data-w="${w}" title="${WEAPON_INFO[w].name}: ${WEAPON_INFO[w].desc}">${WEAPON_ICON[w]} ${WEAPON_SHORT[w]}</button>`).join('')}
+          </div>
+          <div class="upgrade-row">
+            ${[1, 10, 100].map((n) => {
+              const u = upgradeTotal(t, n);
+              return u.steps === 0
+                ? ''
+                : `<button class="ui-btn ${p.coins >= u.cost ? 'primary' : ''}" data-up="${n}" ${p.coins >= u.cost ? '' : 'disabled'}>+${u.steps} Sv. ${coins(u.cost)}</button>`;
+            }).join('') || '<span class="hint">Maksimum seviye!</span>'}
           </div>
           <details class="stats-box">
             <summary>Özellikler <small>${p.stats.battles} savaş · %${winRate} galibiyet</small></summary>
@@ -195,7 +213,10 @@ export class App {
             <button class="ui-btn" data-a="shop">🛒 Mağaza</button>
             <button class="ui-btn" data-a="help">❔</button>
           </div>
-          <button class="battle-btn" data-a="battle">SAVAŞA GİR</button>
+          <div class="mode-row">
+            ${([4, 8, 12] as TeamSize[]).map((n) => `<button class="chip ${this.teamSize === n ? 'on' : ''}" data-mode="${n}">${n}v${n}</button>`).join('')}
+          </div>
+          <button class="battle-btn" data-a="battle">SAVAŞA GİR <small>${this.teamSize}v${this.teamSize}</small></button>
         </div>
       </div>`;
 
@@ -218,6 +239,31 @@ export class App {
       b.addEventListener('click', () => {
         sfx.click();
         this.openPartPicker(t, b.dataset.s as Slot);
+      }),
+    );
+    this.ui.querySelectorAll<HTMLButtonElement>('[data-w]').forEach((b) =>
+      b.addEventListener('click', () => {
+        sfx.click();
+        t.weapon = b.dataset.w as WeaponId;
+        this.save();
+        this.showGarage();
+      }),
+    );
+    this.ui.querySelectorAll<HTMLButtonElement>('[data-up]').forEach((b) =>
+      b.addEventListener('click', () => {
+        if (upgradeTank(p, t, Number(b.dataset.up))) {
+          sfx.reward();
+          this.save();
+          this.showGarage();
+        }
+      }),
+    );
+    this.ui.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((b) =>
+      b.addEventListener('click', () => {
+        sfx.click();
+        this.teamSize = Number(b.dataset.mode) as TeamSize;
+        localStorage.setItem('armorline.mode', String(this.teamSize));
+        this.showGarage();
       }),
     );
     this.on('[data-a=battle]', () => this.startBattle());
@@ -443,8 +489,15 @@ export class App {
       <p>5'e 5 savaş, 5 dakika. Rakip takımı yok et ya da süre bittiğinde daha çok canla kal.</p>
       <p>Düşmanları ancak takımından biri görürse görürsün (spot). Mobil tanklar en iyi gözcülerdir.</p>
       <p>Mermi zırhı delerse hasar verir. Eğimli zırh daha kalındır, çok açılı vuruşlar sekebilir. Optic parçası, nişan aldığın yerin delinip delinmeyeceğini renkle gösterir (kırmızı: delemez, yeşil: deler).</p>
+      <h3>Modlar ve silahlar</h3>
+      <p>4v4, 8v8 ve 12v12 savaşlar var; büyük modlarda harita da büyür. Her maçta harita yeniden üretilir.</p>
+      <p>Her tanka 4 silahtan birini seçebilirsin: Ağır (uzun dolum, güçlü), Standart, Hızlı (kısa dolum, az hasar) ve Şarjörlü (4 mermi, sonra uzun dolum).</p>
+      <p>Para ile tankının seviyesini yükseltebilirsin (1–1000); her seviye can, hasar, zırh ve delme ekler.</p>
+      <h3>Hasar sistemi</h3>
+      <p>Yakıt deposunu (arka yanlar) delersen tank yanar ve saniye başı hasar alır. Taretin arkasındaki dolum bölmesini delersen rakibin dolum süresi iki katına çıkar. Paleti vurursan palet kopar, 2 saniye hareket edemez.</p>
+      <p>Elektrik Kalkanı 20 saniyede dolar; doluyken hasarın bir kısmını durdurur. Art arda vurulursa toparlanamaz.</p>
       <h3>Ödüller</h3>
-      <p>Verdiğin hasar kadar para kazanırsın (galibiyette 2 katı). Galibiyette %${DROP_CHANCE.tank.win * 100} tank, %${DROP_CHANCE.part.win * 100} parça; mağlubiyette %${DROP_CHANCE.tank.loss * 100} tank, %${DROP_CHANCE.part.loss * 100} parça şansı.</p>`;
+      <p>Verdiğin hasar, imha (+${COINS_PER_KILL}) ve asist (+${COINS_PER_ASSIST}) kadar para kazanırsın (galibiyette 2 katı). Galibiyette %${DROP_CHANCE.tank.win * 100} tank, %${DROP_CHANCE.part.win * 100} parça; mağlubiyette %${DROP_CHANCE.tank.loss * 100} tank, %${DROP_CHANCE.part.loss * 100} parça şansı.</p>`;
     this.openModal('help', '❔ Nasıl oynanır', body + `<h3>Krediler</h3><p>Tank modelleri: Quaternius, "Animated Tank Pack" (CC0).</p>`);
   }
 
@@ -460,10 +513,14 @@ export class App {
     this.battle = new Battle(
       this.renderer,
       this.ui,
-      { spec: { nation: t.nation, cls: t.cls, rarity: t.rarity, stats: tankStats(p, t) }, name: 'Sen' },
-      { quality: this.quality },
+      { spec: { nation: t.nation, cls: t.cls, rarity: t.rarity, stats: tankStats(p, t) }, name: 'Sen', level: tankLevel(t) },
+      { quality: this.quality, teamSize: this.teamSize },
       (r) => this.finishBattle(r),
-      () => this.finishBattle({ win: false, draw: false, damage: 0, kills: 0, survived: false }, true),
+      () =>
+        this.finishBattle(
+          { win: false, draw: false, damage: 0, kills: 0, assists: 0, survived: false, scoreboard: [], teamSize: this.teamSize },
+          true,
+        ),
     );
     this.resize();
   }
@@ -471,7 +528,7 @@ export class App {
   private finishBattle(r: BattleResult, quit = false): void {
     this.battle = null;
     if (document.pointerLockElement) document.exitPointerLock();
-    const reward = rollRewards(r.win, quit ? 0 : r.damage);
+    const reward = quit ? rollRewards(false, 0) : rollRewards(r.win, r.damage, Math.random, r.kills, r.assists);
     applyReward(this.profile, reward);
     this.save();
     this.showGarage();
@@ -504,10 +561,13 @@ export class App {
         <div class="res-stats">
           <div><b>${r.damage}</b><span>Hasar</span></div>
           <div><b>${r.kills}</b><span>İmha</span></div>
+          <div><b>${r.assists}</b><span>Asist</span></div>
           <div><b>${r.survived ? 'Evet' : 'Hayır'}</b><span>Hayatta</span></div>
         </div>
         <div class="res-coins">+${coins(rw.coins)} ${r.win ? '<small>(galibiyet ×2)</small>' : ''}</div>
+        <div class="res-break hint">Hasar ${Math.round(r.damage * COINS_PER_DAMAGE)} + İmha ${r.kills}×${COINS_PER_KILL} + Asist ${r.assists}×${COINS_PER_ASSIST}${r.win ? ' → ×2' : ''}</div>
         <div class="drops">${drops.length ? drops.join('') : '<p class="hint">Bu sefer tank ya da parça düşmedi.</p>'}</div>
+        ${r.scoreboard.length ? `<details class="res-board" open><summary>Oyun tablosu (${r.teamSize}v${r.teamSize})</summary>${scoreboardHtml(r.scoreboard)}</details>` : ''}
         <button class="battle-btn" data-again>TEKRAR SAVAŞ</button>
       </div>`;
     const m = this.openModal('result', 'Savaş sonucu', body);

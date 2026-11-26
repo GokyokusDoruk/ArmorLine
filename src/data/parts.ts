@@ -1,7 +1,7 @@
 import { RARITY_INFO, rarityIndex, type Rarity } from './rarity';
 import { NATION_INFO, type Nation, type TankStats } from './tanks';
 
-export const SLOTS = ['gun', 'turret', 'armor', 'front', 'engine', 'tracks', 'optic'] as const;
+export const SLOTS = ['gun', 'turret', 'armor', 'front', 'engine', 'tracks', 'optic', 'shield'] as const;
 export type Slot = (typeof SLOTS)[number];
 
 export interface SlotInfo {
@@ -19,6 +19,7 @@ export const SLOT_INFO: Record<Slot, SlotInfo> = {
   engine: { id: 'engine', name: 'Engine', icon: '⚙️', effects: ['Hız', 'İvmelenme'] },
   tracks: { id: 'tracks', name: 'Palet', icon: '⛓️', effects: ['Dönüş hızı', 'Can', 'Hız'] },
   optic: { id: 'optic', name: 'Optic', icon: '🔭', effects: ['Nişan zoom', 'Zırh analizi'] },
+  shield: { id: 'shield', name: 'Elektrik Kalkanı', icon: '⚡', effects: ['Hasar azaltma (dolu kalkanla)'] },
 };
 
 export interface Part {
@@ -40,6 +41,14 @@ export function opticLevelFor(r: Rarity): number {
 /** How far off (±) the optic's pen-chance estimate can be, by optic level 0..8. */
 export const OPTIC_ERROR = [0.3, 0.22, 0.17, 0.13, 0.09, 0.06, 0.035, 0.015, 0];
 
+/** Seconds for an empty electric shield to recharge fully. */
+export const SHIELD_RECHARGE = 20;
+
+/** Max damage share a full shield stops, by rarity (poor 25% .. divine 60%). */
+export function shieldPowerFor(r: Rarity): number {
+  return 0.25 + rarityIndex(r) * 0.05;
+}
+
 /** Human-readable effect lines for a part, e.g. "+8% Hasar". */
 export function partEffects(p: Part): string[] {
   const b = Math.round(RARITY_INFO[p.rarity].partBonus * 100);
@@ -57,6 +66,8 @@ export function partEffects(p: Part): string[] {
       return [`+${b * 2}% Dönüş hızı`, `+${half}% Can`, `+${half}% Hız`];
     case 'front':
       return [`+${b * 3}% Ram hasarı`, `+${b}% Ön gövde zırhı`, `+${Math.round(b * 1.5)}% Önden sektirme`];
+    case 'shield':
+      return [`Dolu kalkan hasarın %${Math.round(shieldPowerFor(p.rarity) * 100)}'ini durdurur`, `${SHIELD_RECHARGE} sn'de tam dolar`, 'Art arda vuruşta toparlanamaz'];
     case 'optic': {
       const err = Math.round(OPTIC_ERROR[opticLevelFor(p.rarity)] * 100);
       return [`+${b * 2}% Zoom`, err > 0 ? `Delme/hasar tahmini ±%${err}` : 'Delme/hasar tahmini kusursuz'];
@@ -108,6 +119,9 @@ export function applyParts(stats: TankStats, parts: Part[]): TankStats {
         s.ramPower *= 1 + b * 3;
         s.hullArmor.front *= 1 + b;
         s.frontRicochet = Math.min(0.5, s.frontRicochet + b * 1.5);
+        break;
+      case 'shield':
+        s.shieldPower = shieldPowerFor(p.rarity);
         break;
       case 'optic':
         s.zoom *= 1 + b * 2;

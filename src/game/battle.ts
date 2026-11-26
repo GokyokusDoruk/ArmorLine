@@ -4,19 +4,22 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RARITIES, rarityIndex, type Rarity } from '../data/rarity';
-import { NATIONS, baseTankStats, type TankClass } from '../data/tanks';
+import { NATIONS, WEAPONS, applyLevel, applyWeapon, baseTankStats, type TankClass } from '../data/tanks';
 import { Bot, type AiWorld } from './ai';
 import { analyzeShot, chanceColor, resolveHit } from './armor';
-import { OPTIC_ERROR } from '../data/parts';
+import { OPTIC_ERROR, shieldPowerFor } from '../data/parts';
 import { sfx } from './audio';
 import { Fx } from './fx';
 import { Hud } from './hud';
+import type { ScoreRow } from './scoreboard';
+export type { ScoreRow } from './scoreboard';
 import { Input } from './input';
-import { ENGINE_DAMAGE_CHANCE, TRACK_STUN, Tank, ZONES, wrapAngle, type ArmorZone, type TankHit, type TankSpec } from './tank';
+import { ENGINE_DAMAGE_CHANCE, FIRE_SECONDS, TRACK_STUN, Tank, WEAK_KEYS, ZONES, wrapAngle, type ArmorZone, type TankHit, type TankSpec, type WeakKey } from './tank';
 import { updateDivineTrim, updateTrackAnim } from './tankModel';
-import { buildWorld, heightAt, lineOfSight, raycastStatic, rectOverlap } from './world';
+import { ARENA_HALF, SPAWN_DEPTH, buildWorld, generateMap, heightAt, lineOfSight, raycastStatic, rectOverlap, type TeamSize } from './world';
 
-export const MATCH_SECONDS = 300;
+/** Match length grows with the mode. */
+export const MATCH_SECONDS: Record<TeamSize, number> = { 4: 300, 8: 360, 12: 420 };
 const GRAVITY_ARTY = 30;
 /** Closing speed (units/s) needed before a collision counts as a ram. */
 const RAM_MIN_SPEED = 4;
@@ -33,8 +36,13 @@ function artillerySpeed(from: THREE.Vector3, target: THREE.Vector3, pitch: numbe
   if (x < 2 || den <= 0) return null;
   return Math.sqrt((GRAVITY_ARTY * x * x) / den);
 }
-const TEAM_SIZE = 5;
-const LINEUP: TankClass[] = ['heavy', 'heavy', 'mobile', 'sniper', 'artillery'];
+/** Class mix for a team of `n`: ~40% Tank, the rest split between Mobil, Sniper and Artillery. */
+function lineupFor(n: number): TankClass[] {
+  const out: TankClass[] = [];
+  const order: TankClass[] = ['heavy', 'mobile', 'heavy', 'sniper', 'artillery', 'heavy', 'mobile', 'sniper', 'heavy', 'artillery', 'mobile', 'heavy'];
+  for (let i = 0; i < n; i++) out.push(order[i % order.length]);
+  return out;
+}
 
 const BOT_NAMES = [
   'Kurt', 'Demir', 'Atlas', 'Kartal', 'Yıldırım', 'Poyraz', 'Bora', 'Toros', 'Kaya', 'Tufan',
@@ -42,17 +50,22 @@ const BOT_NAMES = [
   'Zeus', 'Kobra', 'Panter', 'Reis', 'Kaplan', 'Şimşek', 'Fırtına', 'Duman', 'Ateş', 'Pars',
 ];
 
+
 export interface BattleResult {
   win: boolean;
   draw: boolean;
   damage: number;
   kills: number;
+  assists: number;
   survived: boolean;
+  scoreboard: ScoreRow[];
+  teamSize: TeamSize;
 }
 
 export interface PlayerLoadout {
   spec: Omit<TankSpec, 'team' | 'name' | 'isPlayer'>;
   name: string;
+  level: number;
 }
 
 interface Shell {
@@ -69,6 +82,7 @@ interface Shell {
 
 export interface BattleOptions {
   quality: 'high' | 'low';
+  teamSize: TeamSize;
 }
 
 const _v1 = new THREE.Vector3();
@@ -81,7 +95,8 @@ export class Battle implements AiWorld {
   tanks: Tank[] = [];
   player: Tank;
   time = 0;
-  timeLeft = MATCH_SECONDS;
+  timeLeft: number;
+  readonly teamSize: TeamSize;
   private bots: Bot[] = [];
   private shells: Shell[] = [];
   private fx: Fx;
@@ -122,7 +137,10 @@ export class Battle implements AiWorld {
     private onEnd: (r: BattleResult) => void,
     private onQuit: () => void,
   ) {
-    this.camera = new THREE.PerspectiveCamera(60, 1, 0.3, 700);
+    this.camera = new THREE.PerspectiveCamera(60, 1, 0.3, 900);
+    this.teamSize = opts.teamSize;
+    this.timeLeft = MATCH_SECONDS[opts.teamSize];
+    generateMap(opts.teamSize);
     buildWorld(this.scene);
     this.fx = new Fx(this.scene);
     this.hud = new Hud(uiRoot);
@@ -134,11 +152,12 @@ export class Battle implements AiWorld {
     // Teams
     const names = [...BOT_NAMES].sort(() => Math.random() - 0.5);
     const pr = loadout.spec.rarity;
+    const n = opts.teamSize;
     let ni = 0;
     for (const team of [0, 1] as const) {
-      const lineup = [...LINEUP];
-      if (team === 0) lineup.splice(lineup.indexOf(loadout.spec.cls), 1);
-      for (let i = 0; i < TEAM_SIZE; i++) {
+      const lineup = lineupFor(n);
+      if (team === 0) lineup.splice(lineup.indexOf(loadout.spec.cls) >= 0 ? lineup.indexOf(loadout.spec.cls) : 0, 1);
+      for (let i = 0; i < n; i++) {
         let spec: TankSpec;
         if (team === 0 && i === 0) {
           spec = { ...loadout.spec, team, name: loadout.name, isPlayer: true };
@@ -146,7 +165,11 @@ export class Battle implements AiWorld {
           const cls = team === 0 ? lineup[i - 1] : lineup[i];
           const nation = NATIONS[Math.floor(Math.random() * NATIONS.length)];
           const rarity = botRarity(pr);
-          spec = { name: names[ni++ % names.length], nation, cls, rarity, stats: baseTankStats(nation, cls, rarity), team };
+          const level = Math.max(1, Math.round(loadout.level * (0.85 + Math.random() * 0.3)));
+          const weapon = WEAPONS[Math.floor(Math.random() * WEAPONS.length)];
+          let stats = applyWeapon(applyLevel(baseTankStats(nation, cls, rarity), level), weapon, nation);
+          if (Math.random() < 0.5) stats = { ...stats, shieldPower: shieldPowerFor(rarity) };
+          spec = { name: names[ni++ % names.length], nation, cls, rarity, stats, team };
         }
         const t = new Tank(spec);
         this.tanks.push(t);
@@ -176,6 +199,8 @@ export class Battle implements AiWorld {
     this.input.bindButton(this.hud.zoomBtn, () => (this.input.zoomPressed = true));
     this.input.bindButton(this.hud.artyBtn, () => (this.input.artyPressed = true));
     this.input.bindButton(this.hud.menuBtn, () => this.togglePause());
+    this.input.bindButton(this.hud.scoreBtn, () => this.hud.toggleScoreboard(() => this.scoreboard()));
+    this.input.onKey('tab', (down) => this.hud.toggleScoreboard(() => this.scoreboard(), down));
 
     if (opts.quality === 'high') {
       this.composer = new EffectComposer(renderer);
@@ -188,12 +213,16 @@ export class Battle implements AiWorld {
   }
 
   private placeTeams(): void {
+    const half = ARENA_HALF;
     for (const team of [0, 1] as const) {
       const members = this.tanks.filter((t) => t.spec.team === team);
       const s = team === 0 ? -1 : 1;
+      const spread = Math.min(half * 0.75, 12 * members.length);
       members.forEach((t, i) => {
-        const x = [-34, -17, 0, 17, 34][i] * s;
-        const z = (t.spec.cls === 'artillery' ? 92 : t.spec.cls === 'sniper' ? 88 : 82) * s;
+        const fx = members.length === 1 ? 0 : (i / (members.length - 1)) * 2 - 1;
+        const x = fx * spread * s;
+        const back = t.spec.cls === 'artillery' ? 8 : t.spec.cls === 'sniper' ? 4 : 0;
+        const z = (half - SPAWN_DEPTH + 8 + back) * s;
         t.pos.set(x, heightAt(x, z), z);
         t.yaw = team === 0 ? 0 : Math.PI;
         t.turretYaw = t.yaw;
@@ -346,6 +375,8 @@ export class Battle implements AiWorld {
     }
     this.separateTanks(visual);
     this.wallImpacts(visual);
+    this.burning(dt, visual);
+    this.updateDebris();
     for (const t of this.tanks) {
       t.syncModel();
       if (visual) {
@@ -424,6 +455,8 @@ export class Battle implements AiWorld {
               this.shake = Math.max(this.shake, 0.6);
             }
           }
+          this.jolt(a, new THREE.Vector3(-tx, 0, -tz), 1.3);
+          this.jolt(b, new THREE.Vector3(tx, 0, tz), 1.3);
           a.speed *= 0.4;
           b.speed *= 0.4;
         } else {
@@ -444,6 +477,7 @@ export class Battle implements AiWorld {
       const at = t.pos.clone().addScaledVector(t.forward, t.dims.L * 0.5);
       at.y += 1;
       this.applyDamage(t, dmg, t, at, visual);
+      t.shakeHull(0, -1.4);
       if (visual) {
         this.fx.sparks(at, undefined, 16);
         sfx.blocked(this.nearness(at));
@@ -711,13 +745,39 @@ export class Battle implements AiWorld {
         target.engineDamaged = true;
         module = 'engine';
       }
+      if (h.zone === 'fuel' && r.result === 'pen') {
+        target.burnTimer = FIRE_SECONDS;
+        target.burnSource = s.owner;
+        module = 'fire';
+      }
+      if (h.zone === 'turretRear' && r.result === 'pen' && !target.loaderDamaged) {
+        target.loaderDamaged = true;
+        module = 'loader';
+      }
+      // Electric shield soaks part of the hit (only if it had time to recharge).
+      if (dmg > 0 && target.stats.shieldPower > 0) {
+        const before = dmg;
+        dmg = target.absorb(dmg);
+        if (visual && before > dmg) {
+          this.fx.sparks(point, new THREE.Color(0.4, 0.85, 1), 22);
+          sfx.ricochet(near * 0.7);
+          if (target === this.player) this.hud.callout(`KALKAN -${before - dmg}`, '#66e0ff');
+        }
+      }
       if (dmg > 0) this.applyDamage(target, dmg, s.owner, point, visual);
+      // Hit jolt: rock the hull away from the shell.
+      this.jolt(target, dir, dmg > 0 ? 1 : 0.4);
+      if (module === 'track') this.breakTrack(target, point, visual);
       if (visual && module) {
         const mine = target === this.player;
         if (mine || byPlayer) {
-          const txt = module === 'track'
-            ? (mine ? 'PALET HASARLI!' : 'PALET KOPTU!')
-            : (mine ? 'MOTOR HASAR GÖRDÜ!' : 'MOTOR VURULDU!');
+          const texts: Record<string, [string, string]> = {
+            track: ['PALET HASARLI!', 'PALET KOPTU!'],
+            engine: ['MOTOR HASAR GÖRDÜ!', 'MOTOR VURULDU!'],
+            fire: ['TANKIN YANIYOR!', 'DEPO YANIYOR!'],
+            loader: ['DOLUM HASARLI!', 'DOLUM VURULDU!'],
+          };
+          const txt = texts[module][mine ? 0 : 1];
           setTimeout(() => this.hud.callout(txt, mine ? '#ff9a3c' : '#9affb8'), 450);
         }
       }
@@ -757,8 +817,10 @@ export class Battle implements AiWorld {
         if (!t.alive || t === target) continue;
         const d = t.center(_v3).distanceTo(point);
         if (d > s.splash) continue;
-        const dmg = Math.round(s.dmg * 0.4 * (1 - d / s.splash) - t.stats.hullArmor.rear * 0.25);
+        let dmg = Math.round(s.dmg * 0.4 * (1 - d / s.splash) - t.stats.hullArmor.rear * 0.25);
+        if (dmg > 0) dmg = t.absorb(dmg);
         if (dmg > 0) this.applyDamage(t, dmg, s.owner, _v3.clone(), visual);
+        this.jolt(t, _v3.clone().sub(point).normalize(), 0.7);
       }
     }
   }
@@ -815,7 +877,10 @@ export class Battle implements AiWorld {
       draw,
       damage: Math.round(this.player.damageDealt),
       kills: this.player.kills,
+      assists: this.player.assists,
       survived: this.player.alive,
+      scoreboard: this.scoreboard(),
+      teamSize: this.teamSize,
     };
     this.hud.callout(draw ? 'BERABERE' : win ? 'ZAFER!' : 'YENİLGİ', draw ? '#ffffff' : win ? '#3ddc6a' : '#ff4a4a');
     this.hud.deadPanel.classList.add('hidden');
@@ -880,8 +945,15 @@ export class Battle implements AiWorld {
     this.camera.lookAt(lookAt);
   }
 
+  private boardTimer = 0;
+
   private updateHud(dt: number): void {
     const p = this.player;
+    this.boardTimer -= dt;
+    if (this.boardTimer <= 0) {
+      this.boardTimer = 0.5;
+      this.hud.refreshScoreboard(this.scoreboard());
+    }
     let status = '';
     let color = '#ffffff';
     if (!p.alive) {
@@ -947,6 +1019,98 @@ export class Battle implements AiWorld {
     );
   }
 
+  private debris: { mesh: THREE.Object3D; until: number; tank: Tank; side: 'left' | 'right' }[] = [];
+  private fireFx = 0;
+
+  /** Rock a tank's hull away from a world-space direction (hits, splash, rams). */
+  private jolt(t: Tank, worldDir: THREE.Vector3, strength: number): void {
+    const f = t.forward;
+    // world -> local: x = right (cos yaw, -sin yaw), z = forward
+    const lx = worldDir.x * f.z - worldDir.z * f.x;
+    const lz = worldDir.x * f.x + worldDir.z * f.z;
+    t.shakeHull(lx * strength, lz * strength);
+    if (t === this.player) this.shake = Math.max(this.shake, 0.25 + strength * 0.3);
+  }
+
+  /** Fire from a penetrated fuel tank: damage every half second, credited to whoever lit it. */
+  private burning(dt: number, visual: boolean): void {
+    this.fireFx -= dt;
+    const puff = this.fireFx <= 0;
+    if (puff) this.fireFx = 0.06;
+    for (const t of this.tanks) {
+      if (!t.alive) continue;
+      if (t.burnPending >= 20 || (t.burnTimer <= 0 && t.burnPending > 0)) {
+        const dmg = Math.round(t.burnPending);
+        t.burnPending = 0;
+        if (dmg > 0) {
+          const src = t.burnSource && t.burnSource.spec.team !== t.spec.team ? t.burnSource : t;
+          this.applyDamage(t, dmg, src, t.center(new THREE.Vector3()), visual);
+          if (visual && t.burnSource === this.player) this.hud.floatText(t.center(new THREE.Vector3()), `🔥${dmg}`, '#ff9a3c');
+        }
+      }
+      if (visual && puff && t.burnTimer > 0 && t.model.root.visible) {
+        const at = t.weakSpotPoint('fuelL').lerp(t.weakSpotPoint('fuelR'), 0.5);
+        this.fx.flame(at);
+      }
+    }
+  }
+
+  /** Broken track: hide it on the tank and leave the chain lying on the ground for TRACK_STUN seconds. */
+  private breakTrack(t: Tank, point: THREE.Vector3, visual: boolean): void {
+    const f = t.forward;
+    const dx = point.x - t.pos.x;
+    const dz = point.z - t.pos.z;
+    const side: 'left' | 'right' = dx * f.z - dz * f.x < 0 ? 'left' : 'right';
+    if (!visual || t.brokenTrack) return;
+    t.brokenTrack = side;
+    for (const m of t.model.tracks[side]) m.visible = false;
+    const chain = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.9 });
+    const n = 10;
+    for (let i = 0; i < n; i++) {
+      const link = new THREE.Mesh(new THREE.BoxGeometry(t.dims.W * 0.22, 0.12, t.dims.L / n * 0.9), mat);
+      link.position.set((Math.random() - 0.5) * 0.4, 0.06, (i / (n - 1) - 0.5) * t.dims.L * 1.1);
+      link.rotation.y = (Math.random() - 0.5) * 0.5;
+      chain.add(link);
+    }
+    const sx = side === 'left' ? -1 : 1;
+    const right = new THREE.Vector3(f.z, 0, -f.x);
+    chain.position.copy(t.pos).addScaledVector(right, sx * (t.dims.W / 2 + 0.6));
+    chain.position.y = heightAt(chain.position.x, chain.position.z);
+    chain.rotation.y = t.yaw + (Math.random() - 0.5) * 0.3;
+    this.scene.add(chain);
+    this.debris.push({ mesh: chain, until: this.time + TRACK_STUN, tank: t, side });
+  }
+
+  private updateDebris(): void {
+    for (let i = this.debris.length - 1; i >= 0; i--) {
+      const d = this.debris[i];
+      if (this.time < d.until) continue;
+      this.scene.remove(d.mesh);
+      if (d.tank.alive) for (const m of d.tank.model.tracks[d.side]) m.visible = true;
+      d.tank.brokenTrack = null;
+      this.debris.splice(i, 1);
+    }
+  }
+
+  /** Damage, kills and assists for every tank, best first within each team. */
+  scoreboard(): ScoreRow[] {
+    return this.tanks
+      .map((t) => ({
+        name: t.spec.name,
+        model: t.modelName,
+        nation: t.spec.nation,
+        cls: t.spec.cls,
+        team: t.spec.team,
+        isPlayer: t === this.player,
+        alive: t.alive,
+        damage: Math.round(t.damageDealt),
+        kills: t.kills,
+        assists: t.assists,
+      }))
+      .sort((a, b) => a.team - b.team || b.damage - a.damage);
+  }
+
   private weakTimer = 0;
 
   /** While zoomed, light up enemy weak spots colored by how likely you are to pen them. */
@@ -958,12 +1122,13 @@ export class Battle implements AiWorld {
     const origin = p.gunOrigin(new THREE.Vector3());
     for (const e of this.tanks) {
       const enemy = e.spec.team !== p.spec.team && e.alive && this.visibleTo(p.spec.team, e);
-      for (const [zone, mesh] of Object.entries(e.model.weak) as [ArmorZone, THREE.Mesh][]) {
+      for (const [key, mesh] of Object.entries(e.model.weak) as [WeakKey, THREE.Mesh][]) {
+        const zone: ArmorZone = WEAK_KEYS[key];
         if (!enemy) {
           mesh.visible = false;
           continue;
         }
-        const target = e.weakSpotPoint(zone);
+        const target = e.weakSpotPoint(key);
         const dir = target.clone().sub(origin).normalize();
         const h = e.raycast(origin, dir, 500);
         // Only show spots that face you (the ray actually lands on that zone).
