@@ -380,3 +380,94 @@ export function buildWorld(scene: THREE.Scene): void {
     scene.add(t);
   }
 }
+
+// ---------------------------------------------------------------- oriented boxes (2D, top-down)
+
+/** A rectangle on the ground: center, half extents (hx across, hz along), and yaw. */
+export interface Rect {
+  cx: number;
+  cz: number;
+  hx: number;
+  hz: number;
+  yaw: number;
+}
+
+export interface Push {
+  /** Unit direction to move `a` out of `b` (pointing away from b). */
+  nx: number;
+  nz: number;
+  depth: number;
+}
+
+function axesOf(r: Rect): [number, number][] {
+  const s = Math.sin(r.yaw);
+  const c = Math.cos(r.yaw);
+  // forward (sin, cos), right (cos, -sin)
+  return [
+    [s, c],
+    [c, -s],
+  ];
+}
+
+function radiusOn(r: Rect, ax: number, az: number): number {
+  const s = Math.sin(r.yaw);
+  const c = Math.cos(r.yaw);
+  return r.hz * Math.abs(s * ax + c * az) + r.hx * Math.abs(c * ax - s * az);
+}
+
+/** Separating-axis test between two rectangles. Returns how to push `a` out of `b`. */
+export function rectOverlap(a: Rect, b: Rect): Push | null {
+  const dx = b.cx - a.cx;
+  const dz = b.cz - a.cz;
+  let best: Push | null = null;
+  for (const [ax, az] of [...axesOf(a), ...axesOf(b)]) {
+    const d = dx * ax + dz * az;
+    const overlap = radiusOn(a, ax, az) + radiusOn(b, ax, az) - Math.abs(d);
+    if (overlap <= 0) return null;
+    if (!best || overlap < best.depth) {
+      const sign = d > 0 ? -1 : 1;
+      best = { nx: ax * sign, nz: az * sign, depth: overlap };
+    }
+  }
+  return best;
+}
+
+/**
+ * Pushes a tank rectangle out of obstacles and the arena walls (mutates r.cx/r.cz).
+ * Returns the total push vector, or null if nothing was hit.
+ */
+export function resolveRect(r: Rect, y: number): { x: number; z: number } | null {
+  let px = 0;
+  let pz = 0;
+  for (let iter = 0; iter < 3; iter++) {
+    let moved = false;
+    for (const o of OBSTACLES) {
+      if (y > o.maxY + 0.5) continue;
+      const box: Rect = {
+        cx: (o.minX + o.maxX) / 2,
+        cz: (o.minZ + o.maxZ) / 2,
+        hx: (o.maxX - o.minX) / 2,
+        hz: (o.maxZ - o.minZ) / 2,
+        yaw: 0,
+      };
+      const p = rectOverlap(r, box);
+      if (p) {
+        r.cx += p.nx * p.depth;
+        r.cz += p.nz * p.depth;
+        px += p.nx * p.depth;
+        pz += p.nz * p.depth;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  // Arena walls: keep every corner inside.
+  const ex = radiusOn(r, 1, 0);
+  const ez = radiusOn(r, 0, 1);
+  const lim = ARENA_HALF;
+  if (r.cx + ex > lim) { px -= r.cx + ex - lim; r.cx = lim - ex; }
+  if (r.cx - ex < -lim) { px += -lim - (r.cx - ex); r.cx = -lim + ex; }
+  if (r.cz + ez > lim) { pz -= r.cz + ez - lim; r.cz = lim - ez; }
+  if (r.cz - ez < -lim) { pz += -lim - (r.cz - ez); r.cz = -lim + ez; }
+  return px !== 0 || pz !== 0 ? { x: px, z: pz } : null;
+}

@@ -33,6 +33,20 @@ export interface TankModel {
   trim: THREE.MeshBasicMaterial;
   paint: THREE.MeshStandardMaterial[];
   divine: boolean;
+  /** Weak-spot overlays, shown to the player while zoomed. */
+  weak: Record<WeakZone, THREE.Mesh>;
+}
+
+export type WeakZone = 'lowerFront' | 'rear' | 'cupola';
+
+function weakMesh(w: number, h: number, d: number): THREE.Mesh {
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0.55, depthWrite: false }),
+  );
+  m.visible = false;
+  m.renderOrder = 4;
+  return m;
 }
 
 const darkMat = new THREE.MeshStandardMaterial({ color: 0x23272f, roughness: 0.9, metalness: 0.05 });
@@ -145,11 +159,25 @@ export function buildTankModel(nation: Nation, cls: TankClass, rarity: Rarity): 
   muzzle.position.z = d.barrel + 0.3;
   gun.add(muzzle);
 
+  // Weak spots: thin lower front plate, engine deck at the rear, commander cupola.
+  const lowerFront = weakMesh(d.W * 0.86, d.H * 0.36, 0.12);
+  lowerFront.position.set(0, d.H * 0.2, d.L / 2 + 0.05);
+  body.add(lowerFront);
+  const rear = weakMesh(d.W * 0.8, d.H * 0.5, 0.12);
+  rear.position.set(0, d.H * 0.45, -d.L / 2 - 0.05);
+  body.add(rear);
+  const cupola = weakMesh(d.tW * 0.6, d.tH * 0.32, d.tL * 0.6);
+  cupola.position.set(-d.tW * 0.12, d.tH * 0.86, -d.tL * 0.05);
+  turret.add(cupola);
+
   root.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) o.castShadow = true;
   });
 
-  return { root, body, turret, gun, muzzle, trim, paint: [paint, paint2], divine: rarity === 'divine' };
+  return {
+    root, body, turret, gun, muzzle, trim, paint: [paint, paint2], divine: rarity === 'divine',
+    weak: { lowerFront, rear, cupola },
+  };
 }
 
 export function updateDivineTrim(m: TankModel, time: number): void {
@@ -162,6 +190,7 @@ export function setDestroyedLook(m: TankModel): void {
     p.emissive?.setHex(0x000000);
   }
   m.trim.color.setHex(0x222222);
+  for (const w of Object.values(m.weak)) w.visible = false;
   m.divine = false;
   m.turret.rotation.z = 0.25;
   m.turret.position.y += 0.3;

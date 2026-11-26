@@ -7,7 +7,14 @@ Telefon öncelikli, tarayıcıda da oynanan 3D tank PvP oyunu. Vite + TypeScript
 - 5 ülke (SSCB, Almanya, ABD, İngiltere, Fransa) × 4 sınıf (Tank, Mobil, Sniper, Artillery) = 20 tank.
 - 8 nadirlik: Poor, Common, Uncommon, Rare, Epic, Legendary, Mythic, Divine. Düşme olasılıkları 15/12/9/6/5/4/3/2 ağırlıklarının %100'e oranlanmış hâli.
 - Zırh delme, eğimli zırh, sektirme, görüş (spot) sistemi.
-- 6 parça slotu: Main Gun, Turret, Armor, Engine, Palet, Optic. Parçalar sadece kendi ülkesinin tanklarına takılır. Optic, nişan alınan yerin delinip delinmeyeceğini renkle (ve nadirliğe göre yüzde ve hasar tahminiyle) gösterir.
+- 7 parça slotu: Main Gun, Turret, Armor, Ön Zırh, Engine, Palet, Optic. Parçalar sadece kendi ülkesinin tanklarına takılır.
+  - Ön Zırh: ram hasarını, ön gövde zırhını ve önden sektirmeyi artırır.
+  - Optic: nişangâhta delme olasılığı ve hasar tahmini her zaman yazar; optic ne kadar nadirse tahmin o kadar doğrudur.
+- Nişan: halka namlunun gerçekten baktığı yeri gösterir. Durdukça küçülür, tam nişanda mermi tam halkanın ortasına gider; hareket ederken isabet düşer.
+- Zırh bölgeleri: üst ön plaka eğimli ve daha çok sektirir, alt ön plaka incedir. Ön daha az, arka daha çok hasar alır. Zoom yapınca zayıf noktalar (alt plaka, kupola, motor) renkli görünür.
+- Modül hasarı: palete isabet eden tank 2 saniye hareket edemez (fren yapar). Arkadan delen vuruş %35 ihtimalle motoru bozar, hız maç sonuna kadar yarıya iner.
+- Çarpışma: tanklar iç içe geçmez; duvara hızlı çarpan tank hasar alır; düşmana çarpmak (ram) hasar verir.
+- Mobil tankların gördüğü düşman, takıma 10 saniye görünür kalır.
 - Ödüller: hasar kadar para (galibiyette 2 katı); galibiyette %10 tank / %15 parça, mağlubiyette %5 tank / %10 parça şansı. Aynı tank tekrar düşerse paraya çevrilir.
 - Mağaza her 5 dakikada bir yenilenir ve 5 parça satar. Nadir parçalar hem daha pahalı hem daha seyrek gelir.
 - İlerleme tarayıcıda (`localStorage`) saklanır.
@@ -32,6 +39,8 @@ npm run build
 Çıktı `dist/` klasörüne yazılır (statik dosyalar, göreli yollar).
 
 ## Yayın (Cloudflare Pages)
+Çalışma akışı: yeni iş bir dalda yapılır, PR açılır. GitHub Actions (`.github/workflows/ci.yml`) testleri ve derlemeyi çalıştırır, Cloudflare dal için bir önizleme adresi verir. PR `main`'e birleşince Cloudflare siteyi otomatik yayınlar.
+
 - Derleme komutu: `npm run build`
 - Çıktı klasörü: `dist`
 - Alan adı: `armorline.dorukplays.com`

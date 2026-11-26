@@ -193,7 +193,7 @@ export class Bot {
       t.wantFire = ready && t.aim > 0.75 && t.canFire();
       return;
     }
-    t.eye(_a);
+    t.gunOrigin(_a);
     const dx = _b.x - _a.x;
     const dz = _b.z - _a.z;
     const flat = Math.hypot(dx, dz);
