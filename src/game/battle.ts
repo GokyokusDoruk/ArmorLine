@@ -6,17 +6,22 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RARITIES, rarityIndex, type Rarity } from '../data/rarity';
 import { NATIONS, baseTankStats, type TankClass } from '../data/tanks';
 import { Bot, type AiWorld } from './ai';
-import { analyzeShot, resolveHit } from './armor';
+import { analyzeShot, chanceColor, resolveHit } from './armor';
+import { OPTIC_ERROR } from '../data/parts';
 import { sfx } from './audio';
 import { Fx } from './fx';
 import { Hud } from './hud';
 import { Input } from './input';
-import { Tank, wrapAngle, type TankSpec } from './tank';
-import { updateDivineTrim } from './tankModel';
-import { buildWorld, heightAt, lineOfSight, raycastStatic } from './world';
+import { ENGINE_DAMAGE_CHANCE, TRACK_STUN, Tank, ZONES, wrapAngle, type ArmorZone, type TankHit, type TankSpec } from './tank';
+import { updateDivineTrim, updateTrackAnim } from './tankModel';
+import { buildWorld, heightAt, lineOfSight, raycastStatic, rectOverlap } from './world';
 
 export const MATCH_SECONDS = 300;
 const GRAVITY_ARTY = 30;
+/** Closing speed (units/s) needed before a collision counts as a ram. */
+const RAM_MIN_SPEED = 4;
+/** How long a target spotted by a Mobil tank stays visible to its team. */
+const SPOTTER_SECONDS = 10;
 const ARTY_PITCH = (50 * Math.PI) / 180;
 
 /** Muzzle speed needed to land at `target` when fired at `pitch`; null if impossible. */
@@ -107,6 +112,7 @@ export class Battle implements AiWorld {
   private lastFireSound = 0;
   private dustTimer = 0;
   private paused = false;
+  private ramCooldown = new Map<number, number>();
 
   constructor(
     private renderer: THREE.WebGLRenderer,
@@ -236,8 +242,10 @@ export class Battle implements AiWorld {
           const d = a.pos.distanceTo(e.pos);
           if (d > a.stats.view) continue;
           if (d < 14 || lineOfSight(a.eye(_v1), _v2)) {
-            this.visibleUntil[team].set(e.id, this.time + 2.5);
-            break;
+            // Spotters (Mobil) keep what they see lit up for the whole team for 10 s.
+            const until = this.time + (a.spec.cls === 'mobile' ? SPOTTER_SECONDS : 2.5);
+            if (until > (this.visibleUntil[team].get(e.id) ?? 0)) this.visibleUntil[team].set(e.id, until);
+            if (a.spec.cls === 'mobile') break;
           }
         }
       }
@@ -251,7 +259,8 @@ export class Battle implements AiWorld {
       panel.classList.remove('hidden');
       panel.innerHTML = `<h2>Duraklatıldı</h2>
         <button class="ui-btn primary" data-a="resume">Devam et</button>
-        <button class="ui-btn danger" data-a="quit">Savaştan çık (yenilgi)</button>`;
+        <button class="ui-btn danger" data-a="quit">Savaştan çık (yenilgi)</button>
+        <a class="ui-btn" href="https://dorukplays.com">dorukplays.com'a dön</a>`;
       panel.querySelector('[data-a=resume]')!.addEventListener('click', () => this.togglePause());
       panel.querySelector('[data-a=quit]')!.addEventListener('click', () => {
         this.dispose();
@@ -335,11 +344,13 @@ export class Battle implements AiWorld {
       t.update(dt);
       if (t.alive && t.wantFire && t.canFire()) this.fire(t, visual);
     }
-    this.separateTanks();
+    this.separateTanks(visual);
+    this.wallImpacts(visual);
     for (const t of this.tanks) {
       t.syncModel();
       if (visual) {
         updateDivineTrim(t.model, this.time);
+        if (t.alive && t.model.root.visible) updateTrackAnim(t.model, t.speed, t.steer, dt);
         t.model.root.visible = t.spec.team === this.player.spec.team || this.visibleTo(this.player.spec.team, t);
       }
     }
@@ -360,28 +371,86 @@ export class Battle implements AiWorld {
     this.checkEnd();
   }
 
-  private separateTanks(): void {
+  /** Keeps tank footprints from overlapping and applies ramming damage. */
+  private separateTanks(visual: boolean): void {
     for (let i = 0; i < this.tanks.length; i++) {
       for (let j = i + 1; j < this.tanks.length; j++) {
         const a = this.tanks[i];
         const b = this.tanks[j];
-        const r = a.dims.radius * 0.85 + b.dims.radius * 0.85;
-        const dx = b.pos.x - a.pos.x;
-        const dz = b.pos.z - a.pos.z;
-        const d2 = dx * dx + dz * dz;
-        if (d2 < r * r && d2 > 1e-6) {
-          const d = Math.sqrt(d2);
-          const push = (r - d) / 2;
-          const nx = dx / d;
-          const nz = dz / d;
-          const wa = a.alive ? (b.alive ? 0.5 : 1) : 0;
-          const wb = b.alive ? (a.alive ? 0.5 : 1) : 0;
-          a.pos.x -= nx * push * 2 * wa;
-          a.pos.z -= nz * push * 2 * wa;
-          b.pos.x += nx * push * 2 * wb;
-          b.pos.z += nz * push * 2 * wb;
+        if (!a.alive && !b.alive) continue;
+        if (a.pos.distanceToSquared(b.pos) > 100) continue;
+        const ra = a.rect();
+        const push = rectOverlap(ra, b.rect());
+        if (!push) continue;
+        // Heavier tanks get pushed less; wrecks don't move.
+        const ma = a.alive ? a.stats.mass : 1e6;
+        const mb = b.alive ? b.stats.mass : 1e6;
+        const wa = mb / (ma + mb);
+        const wb = ma / (ma + mb);
+        a.pos.x += push.nx * push.depth * wa;
+        a.pos.z += push.nz * push.depth * wa;
+        b.pos.x -= push.nx * push.depth * wb;
+        b.pos.z -= push.nz * push.depth * wb;
+
+        // Ramming: closing speed along the contact normal (a -> b is -push).
+        const fa = a.forward;
+        const fb = b.forward;
+        const tx = -push.nx;
+        const tz = -push.nz;
+        const closing = (fa.x * a.speed - fb.x * b.speed) * tx + (fa.z * a.speed - fb.z * b.speed) * tz;
+        const key = a.id * 1000 + b.id;
+        if (closing > RAM_MIN_SPEED && (this.ramCooldown.get(key) ?? 0) <= this.time && a.spec.team !== b.spec.team) {
+          this.ramCooldown.set(key, this.time + 0.8);
+          const energy = Math.pow(closing - 2, 1.5) * 6;
+          const frontA = Math.max(0, fa.x * tx + fa.z * tz);
+          const frontB = Math.max(0, -(fb.x * tx + fb.z * tz));
+          const toB = Math.round(energy * a.stats.mass * a.stats.ramPower * (0.4 + 0.6 * frontA) * (1 - 0.5 * frontB));
+          const toA = Math.round(energy * b.stats.mass * b.stats.ramPower * (0.4 + 0.6 * frontB) * (1 - 0.5 * frontA));
+          const at = a.pos.clone().lerp(b.pos, 0.5);
+          at.y += 1.2;
+          if (a.alive && b.alive) {
+            if (toB > 0) this.applyDamage(b, toB, a, at, visual);
+            if (toA > 0) this.applyDamage(a, toA, b, at, visual);
+          }
+          if (visual) {
+            this.fx.sparks(at, undefined, 24);
+            sfx.blocked(this.nearness(at));
+            if (a === this.player || b === this.player) {
+              const dealt = a === this.player ? toB : toA;
+              const taken = a === this.player ? toA : toB;
+              this.hud.callout(`RAM! ${dealt}`, '#ffb347');
+              this.hud.floatText(at, `-${dealt}`, '#ffb347', dealt > 300);
+              if (taken > 0) this.hud.flashHit();
+              this.shake = Math.max(this.shake, 0.6);
+            }
+          }
+          a.speed *= 0.4;
+          b.speed *= 0.4;
+        } else {
           a.speed *= 0.95;
           b.speed *= 0.95;
+        }
+      }
+    }
+  }
+
+  /** Damage from driving into walls, reported by each tank's physics step. */
+  private wallImpacts(visual: boolean): void {
+    for (const t of this.tanks) {
+      if (t.wallImpact <= 0) continue;
+      const dmg = t.wallImpact;
+      t.wallImpact = 0;
+      if (!t.alive) continue;
+      const at = t.pos.clone().addScaledVector(t.forward, t.dims.L * 0.5);
+      at.y += 1;
+      this.applyDamage(t, dmg, t, at, visual);
+      if (visual) {
+        this.fx.sparks(at, undefined, 16);
+        sfx.blocked(this.nearness(at));
+        if (t === this.player) {
+          this.hud.callout(`ÇARPIŞMA -${dmg}`, '#ff6b6b');
+          this.hud.flashHit();
+          this.shake = Math.max(this.shake, 0.5);
         }
       }
     }
@@ -467,7 +536,7 @@ export class Battle implements AiWorld {
     // Aim: ray from the camera center, with soft lock on visible enemies.
     this.camera.getWorldDirection(_v1);
     const camPos = this.camera.position;
-    this.lock = this.findLock(camPos, _v1);
+    this.lock = this.zoomed ? null : this.findLock(camPos, _v1);
     if (this.lock) {
       this.lock.center(this.aimPoint);
     } else {
@@ -475,7 +544,8 @@ export class Battle implements AiWorld {
       if (hit) this.aimPoint.copy(hit.point);
       else this.aimPoint.copy(camPos).addScaledVector(_v1, 400);
     }
-    const from = p.eye(_v2);
+    // Aim from the gun's pivot so the barrel line passes exactly through the aim point.
+    const from = p.gunOrigin(_v2);
     p.aimYaw = Math.atan2(this.aimPoint.x - from.x, this.aimPoint.z - from.z);
     p.aimPitch = Math.atan2(this.aimPoint.y - from.y, Math.hypot(this.aimPoint.x - from.x, this.aimPoint.z - from.z));
     p.wantFire = inp.firing;
@@ -626,11 +696,31 @@ export class Battle implements AiWorld {
     const near = this.nearness(point);
     if (target && h && target.alive) {
       const angle = Tank.impactAngle(dir, h.normal);
-      const r = resolveHit(s.pen, s.dmg, h.thickness, angle, target.stats.ricochet);
-      let dmg = r.damage;
+      const r = resolveHit(s.pen, s.dmg, h.thickness, angle, ricochetFor(target, h));
+      // Front plates soak damage, the rear takes extra.
+      let dmg = Math.round(r.damage * ZONES[h.zone].dmgMult);
       // HE (artillery) still hurts a bit without penetrating.
       if (s.splash > 0 && r.result !== 'pen') dmg = Math.max(0, Math.round(s.dmg * 0.35 - h.thickness * 0.8));
+      // Module damage: tracks break on any non-ricochet hit; a penetrating rear hit may wreck the engine.
+      let module = '';
+      if (h.zone === 'track' && r.result !== 'ricochet') {
+        target.trackedTimer = TRACK_STUN;
+        module = 'track';
+      }
+      if (h.zone === 'rear' && r.result === 'pen' && !target.engineDamaged && Math.random() < ENGINE_DAMAGE_CHANCE) {
+        target.engineDamaged = true;
+        module = 'engine';
+      }
       if (dmg > 0) this.applyDamage(target, dmg, s.owner, point, visual);
+      if (visual && module) {
+        const mine = target === this.player;
+        if (mine || byPlayer) {
+          const txt = module === 'track'
+            ? (mine ? 'PALET HASARLI!' : 'PALET KOPTU!')
+            : (mine ? 'MOTOR HASAR GÖRDÜ!' : 'MOTOR VURULDU!');
+          setTimeout(() => this.hud.callout(txt, mine ? '#ff9a3c' : '#9affb8'), 450);
+        }
+      }
       if (visual) {
         if (r.result === 'pen' || s.splash > 0) this.fx.explosion(point, s.splash > 0 ? 1.4 : 0.6);
         else this.fx.sparks(point, new THREE.Color(r.result === 'ricochet' ? 0.6 : 1, 0.9, 1));
@@ -773,9 +863,9 @@ export class Battle implements AiWorld {
       camPos.y += 0.3;
     } else {
       const portrait = window.innerHeight > window.innerWidth;
-      const dist = (focus.spec.cls === 'heavy' ? 13 : 11.5) * (portrait ? 1.15 : 1);
+      const dist = (focus.dims.L * 1.1 + 4) * (portrait ? 1.1 : 1);
       camPos = pivot.clone().addScaledVector(dir, -dist);
-      camPos.y += portrait ? 5.2 : 3.4;
+      camPos.y += portrait ? 4.2 : 2.8;
       // keep the camera out of walls and terrain
       const toCam = camPos.clone().sub(pivot);
       const len = toCam.length();
@@ -815,16 +905,25 @@ export class Battle implements AiWorld {
       color = p.aim > 0.95 ? '#3ddc6a' : '#ffffff';
     }
 
-    let analysis: { chance: number; damage: number } | null = null;
-    if (this.lock && p.stats.opticTier > 0) {
-      const from = p.muzzle(_v1);
-      const dir = this.lock.center(_v2).sub(from).normalize();
-      const h = this.lock.raycast(from, dir, 400);
-      if (h) {
-        const a = analyzeShot(p.stats.pen, p.stats.damage, h.thickness, Tank.impactAngle(dir, h.normal), this.lock.stats.ricochet);
-        analysis = { chance: a.chance, damage: a.expectedDamage };
+    // Where the gun really points right now (shells follow this line, not the screen center).
+    let gunScreen: { x: number; y: number } | null = null;
+    let ringPx = 0;
+    let analysis: ShotEstimate | null = null;
+    if (p.alive && !this.arty) {
+      const origin = p.gunOrigin(_v1);
+      const dir = p.gunDir(_v2);
+      const hit = this.raycastAll(origin, dir, 400, p);
+      const gp = hit ? hit.point.clone() : origin.clone().addScaledVector(dir, 400);
+      const sp = gp.clone().project(this.camera);
+      if (sp.z < 1) gunScreen = { x: (sp.x * 0.5 + 0.5) * window.innerWidth, y: (-sp.y * 0.5 + 0.5) * window.innerHeight };
+      const focal = window.innerHeight / 2 / Math.tan((this.camera.fov * Math.PI) / 360);
+      ringPx = Math.max(14, 2 * Math.tan(p.currentDispersion()) * focal);
+      if (hit?.tank && hit.hit && hit.tank.alive && hit.tank.spec.team !== p.spec.team) {
+        analysis = estimateShot(p, hit.tank, dir, hit.hit);
       }
     }
+    if (this.zoomed) this.updateWeakSpots(dt);
+    else this.hideWeakSpots();
     this.hud.update(
       {
         timeLeft: this.timeLeft,
@@ -836,7 +935,8 @@ export class Battle implements AiWorld {
         statusColor: color,
         lock: this.lock,
         analysis,
-        opticTier: p.stats.opticTier,
+        gunScreen,
+        ringPx,
         zoomed: this.zoomed,
         arty: this.arty,
         spectating: p.alive ? null : this.spectate,
@@ -845,6 +945,42 @@ export class Battle implements AiWorld {
       window.innerWidth,
       window.innerHeight,
     );
+  }
+
+  private weakTimer = 0;
+
+  /** While zoomed, light up enemy weak spots colored by how likely you are to pen them. */
+  private updateWeakSpots(dt: number): void {
+    this.weakTimer -= dt;
+    if (this.weakTimer > 0) return;
+    this.weakTimer = 0.15;
+    const p = this.player;
+    const origin = p.gunOrigin(new THREE.Vector3());
+    for (const e of this.tanks) {
+      const enemy = e.spec.team !== p.spec.team && e.alive && this.visibleTo(p.spec.team, e);
+      for (const [zone, mesh] of Object.entries(e.model.weak) as [ArmorZone, THREE.Mesh][]) {
+        if (!enemy) {
+          mesh.visible = false;
+          continue;
+        }
+        const target = e.weakSpotPoint(zone);
+        const dir = target.clone().sub(origin).normalize();
+        const h = e.raycast(origin, dir, 500);
+        // Only show spots that face you (the ray actually lands on that zone).
+        if (!h || h.zone !== zone) {
+          mesh.visible = false;
+          continue;
+        }
+        const est = estimateShot(p, e, dir, h);
+        mesh.visible = true;
+        (mesh.material as THREE.MeshBasicMaterial).color.set(chanceColor(est.chance));
+        (mesh.material as THREE.MeshBasicMaterial).opacity = 0.35 + 0.25 * Math.sin(this.time * 6) ** 2;
+      }
+    }
+  }
+
+  private hideWeakSpots(): void {
+    for (const e of this.tanks) for (const m of Object.values(e.model.weak)) m.visible = false;
   }
 
   dispose(): void {
@@ -862,6 +998,39 @@ export class Battle implements AiWorld {
       }
     });
   }
+}
+
+export interface ShotEstimate {
+  /** Estimated chance to penetrate (0..1), as accurate as the shooter's optic. */
+  chance: number;
+  /** Estimated damage if it penetrates. */
+  damage: number;
+  zone: string;
+}
+
+/** Stable pseudo-random value in [-1, 1] for a target and zone, so estimates don't flicker. */
+function stableNoise(a: number, b: string): number {
+  let h = a * 2654435761;
+  for (let i = 0; i < b.length; i++) h = Math.imul(h ^ b.charCodeAt(i), 16777619);
+  return (((h >>> 0) % 2001) / 1000) - 1;
+}
+
+/** What the shooter's optic reports for a hit: better optics give closer-to-true numbers. */
+function estimateShot(shooter: Tank, target: Tank, dir: THREE.Vector3, h: TankHit): ShotEstimate {
+  const s = shooter.stats;
+  const a = analyzeShot(s.pen, s.damage, h.thickness, Tank.impactAngle(dir, h.normal), ricochetFor(target, h));
+  const err = OPTIC_ERROR[s.opticLevel] ?? OPTIC_ERROR[0];
+  const step = s.opticLevel === 0 ? 0.1 : s.opticLevel < 3 ? 0.05 : 0.01;
+  const chance = Math.max(0, Math.min(1, Math.round((a.chance + stableNoise(target.id, h.zone) * err) / step) * step));
+  const trueDmg = s.damage * ZONES[h.zone].dmgMult;
+  const damage = Math.round(trueDmg * (1 + stableNoise(target.id * 7 + 3, h.zone) * err));
+  return { chance, damage, zone: ZONES[h.zone].name };
+}
+
+/** Target's sektirme stat for a given plate (Front Armor part boosts the front hull). */
+function ricochetFor(t: Tank, h: { zone: ArmorZone }): number {
+  const front = h.zone === 'upperFront' || h.zone === 'lowerFront' ? t.stats.frontRicochet : 0;
+  return Math.min(0.95, t.stats.ricochet + ZONES[h.zone].ricochetBonus + front);
 }
 
 /** Bots roll close to the player's rarity so matches stay fair. */

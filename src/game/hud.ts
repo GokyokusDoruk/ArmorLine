@@ -14,9 +14,11 @@ export interface HudFrame {
   status: string;
   statusColor: string;
   lock: Tank | null;
-  /** Optic analysis for the current aim point; null when not available. */
-  analysis: { chance: number; damage: number } | null;
-  opticTier: number;
+  /** Optic estimate for the plate the gun points at; null when not on an enemy. */
+  analysis: { chance: number; damage: number; zone: string } | null;
+  /** Screen position where the gun actually points, and the dispersion ring size there. */
+  gunScreen: { x: number; y: number } | null;
+  ringPx: number;
   zoomed: boolean;
   arty: boolean;
   spectating: Tank | null;
@@ -50,6 +52,7 @@ export class Hud {
   private hpText: HTMLDivElement;
   private ammo: HTMLDivElement;
   private status: HTMLDivElement;
+  private modules: HTMLDivElement;
   private reloadBar: HTMLDivElement;
   private reticle: HTMLDivElement;
   private reticleText: HTMLDivElement;
@@ -79,6 +82,7 @@ export class Hud {
       <div class="reticle"><div class="ret-ring"></div><div class="ret-dot"></div><div class="ret-text"></div></div>
       <div class="callouts"></div>
       <div class="player-panel">
+        <div class="modules"></div>
         <div class="status"></div>
         <div class="reload"><div></div></div>
         <div class="hp"><div class="hp-fill"></div><div class="hp-text"></div></div>
@@ -102,6 +106,7 @@ export class Hud {
     this.hpText = q('.hp-text');
     this.ammo = q('.ammo');
     this.status = q('.status');
+    this.modules = q('.modules');
     this.reloadBar = q('.reload > div');
     this.reticle = q('.reticle');
     this.reticleText = q('.ret-text');
@@ -148,27 +153,34 @@ export class Hud {
     this.reloadBar.parentElement!.classList.toggle('ready', p.reloadLeft <= 0);
     this.vignette.style.opacity = String(Math.max(0, 0.6 - hpPct) * 1.2);
 
-    // Reticle
+    // Reticle: the dot is the screen center (where you look); the ring is where the gun points,
+    // sized by the current dispersion. A fully aimed, still tank has a tiny ring = exact shot.
     this.reticle.style.display = f.spectating || f.arty ? 'none' : 'block';
-    const disp = p.currentDispersion();
-    const ringPx = Math.max(16, Math.min(140, disp * 1600 * (f.zoomed ? p.stats.zoom : 1)));
     const ring = this.reticle.firstElementChild as HTMLDivElement;
+    const ringPx = Math.min(Math.max(w, h), f.ringPx);
     ring.style.width = ring.style.height = `${ringPx}px`;
-    let col = f.lock ? '#ffffff' : 'rgba(255,255,255,0.7)';
+    const ox = f.gunScreen ? f.gunScreen.x - w / 2 : 0;
+    const oy = f.gunScreen ? f.gunScreen.y - h / 2 : 0;
+    ring.style.transform = `translate(calc(-50% + ${ox}px), calc(-50% + ${oy}px))`;
+    this.reticleText.style.transform = `translate(calc(-50% + ${ox}px), ${oy + ringPx / 2 + 4}px)`;
+    let col = 'rgba(255,255,255,0.75)';
     let txt = '';
-    if (f.lock && f.analysis && f.opticTier > 0) {
+    if (f.analysis) {
       col = chanceColor(f.analysis.chance);
-      if (f.opticTier >= 2) txt += `${Math.round(f.analysis.chance * 100)}%`;
-      if (f.opticTier >= 3) txt += ` · ~${f.analysis.damage}`;
-    } else if (f.lock) {
+      txt = `Delme %${Math.round(f.analysis.chance * 100)} · ~${f.analysis.damage}`;
+    } else if (p.aim < 0.99) {
       txt = `${Math.round(p.aim * 100)}%`;
     }
     ring.style.borderColor = col;
-    ring.style.boxShadow = f.lock ? `0 0 12px ${col}` : 'none';
+    ring.style.boxShadow = f.analysis ? `0 0 12px ${col}` : 'none';
     this.reticleText.textContent = txt;
     this.reticleText.style.color = col;
     this.zoomBtn.classList.toggle('on', f.zoomed);
     this.artyBtn.classList.toggle('on', f.arty);
+    let mods = '';
+    if (p.trackedTimer > 0) mods += `<span class="mod">⛓️ PALET HASARLI ${p.trackedTimer.toFixed(1)}s</span>`;
+    if (p.engineDamaged) mods += `<span class="mod">⚙️ MOTOR HASARLI</span>`;
+    if (this.modules.innerHTML !== mods) this.modules.innerHTML = mods;
 
     // Name tags
     const seen = new Set<number>();

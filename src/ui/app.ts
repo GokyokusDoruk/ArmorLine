@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RARITIES, RARITY_INFO, rarityChances, rarityCss, rarityIndex, type Rarity } from '../data/rarity';
 import { CLASSES, CLASS_INFO, NATIONS, NATION_INFO, TANK_NAMES, type Nation, type TankClass, type TankStats } from '../data/tanks';
-import { SLOTS, SLOT_INFO, partEffects, partName, type Part, type Slot } from '../data/parts';
+import { OPTIC_ERROR, SLOTS, SLOT_INFO, partEffects, partName, type Part, type Slot } from '../data/parts';
 import {
   equipPart, grantStarterTanks, loadProfile, partOwner, resetProfile, saveProfile, selectedTank,
   sellPart, sellValue, tankStats, unequipSlot, type OwnedTank, type Profile,
@@ -11,6 +11,8 @@ import { buyOffer, msUntilRefresh, shopOffers } from '../meta/shop';
 import { Battle, type BattleResult } from '../game/battle';
 import { isMuted, setMuted, sfx, unlockAudio } from '../game/audio';
 import { GaragePreview } from './preview';
+import { loadTankModels } from '../game/models';
+import { applyModelDims } from '../game/tankModel';
 
 type Screen = 'nation' | 'garage' | 'battle';
 
@@ -40,6 +42,7 @@ export class App {
   private modal: HTMLDivElement | null = null;
   private shopTimer = 0;
   private quality: 'high' | 'low';
+  private tankFilter: Nation | 'all' = 'all';
 
   constructor(private renderer: THREE.WebGLRenderer, private ui: HTMLElement) {
     this.profile = loadProfile();
@@ -50,8 +53,13 @@ export class App {
     window.addEventListener('resize', () => this.resize());
     window.addEventListener('pointerdown', () => unlockAudio(), { capture: true });
     this.resize();
-    if (this.profile.tanks.length === 0) this.showNation();
-    else this.showGarage();
+    this.ui.innerHTML = '<div class="screen loading"><div class="logo">ARMOR<span>LINE</span></div><p class="sub">Tanklar yükleniyor…</p></div>';
+    void loadTankModels().then(() => {
+      applyModelDims();
+      this.preview.reset();
+      if (this.profile.tanks.length === 0) this.showNation();
+      else this.showGarage();
+    });
     renderer.setAnimationLoop(() => this.loop());
     if (import.meta.env.DEV) (window as unknown as { __app: App }).__app = this;
   }
@@ -130,15 +138,28 @@ export class App {
     const st = tankStats(p, t);
     this.preview.show(t.nation, t.cls, t.rarity, RARITY_INFO[t.rarity].color);
 
-    const sortedTanks = [...p.tanks].sort(
-      (a, b) => rarityIndex(b.rarity) - rarityIndex(a.rarity) || a.nation.localeCompare(b.nation) || CLASSES.indexOf(a.cls) - CLASSES.indexOf(b.cls),
-    );
+    // Owned tanks grouped by nation (filter chips pick one nation or all).
+    const byNation = NATIONS.map((n) => ({
+      n,
+      tanks: p.tanks
+        .filter((x) => x.nation === n)
+        .sort((a, b) => CLASSES.indexOf(a.cls) - CLASSES.indexOf(b.cls) || rarityIndex(b.rarity) - rarityIndex(a.rarity)),
+    })).filter((g) => g.tanks.length > 0);
+    if (this.tankFilter !== 'all' && !byNation.some((g) => g.n === this.tankFilter)) this.tankFilter = 'all';
+    const shown = byNation.filter((g) => this.tankFilter === 'all' || g.n === this.tankFilter);
+    const tankCard = (x: OwnedTank) => `
+              <button class="tank-card ${x.id === t.id ? 'sel' : ''}" data-t="${x.id}" style="--rc:${rarityCss(x.rarity)}">
+                <img class="tc-img" src="${tankImg(x.nation, x.cls)}" alt="" loading="lazy">
+                <span class="tc-name">${TANK_NAMES[x.nation][x.cls]}</span>
+                <span class="tc-cls">${CLASS_INFO[x.cls].short}</span>
+              </button>`;
     const winRate = p.stats.battles ? Math.round((p.stats.wins / p.stats.battles) * 100) : 0;
 
     this.ui.innerHTML = `
       <div class="screen garage">
         <header class="topbar">
           <div class="logo small">ARMOR<span>LINE</span></div>
+          <a class="home-link" href="https://dorukplays.com">← dorukplays.com'a dön</a>
           <div class="coins">${coins(p.coins)}</div>
           <button class="icon-btn" data-a="settings" aria-label="Ayarlar">⚙</button>
         </header>
@@ -158,14 +179,16 @@ export class App {
             <summary>Özellikler <small>${p.stats.battles} savaş · %${winRate} galibiyet</small></summary>
             ${this.statsHtml(st)}
           </details>
+          <div class="nation-chips">
+            <button class="chip ${this.tankFilter === 'all' ? 'on' : ''}" data-nf="all">Tümü <small>${p.tanks.length}</small></button>
+            ${byNation.map((g) => `<button class="chip ${this.tankFilter === g.n ? 'on' : ''}" data-nf="${g.n}">${NATION_INFO[g.n].flag} ${NATION_INFO[g.n].name} <small>${g.tanks.length}</small></button>`).join('')}
+          </div>
           <div class="tank-row">
-            ${sortedTanks.map((x) => `
-              <button class="tank-card ${x.id === t.id ? 'sel' : ''}" data-t="${x.id}" style="--rc:${rarityCss(x.rarity)}">
-                <img class="tc-img" src="${tankImg(x.nation, x.cls)}" alt="" loading="lazy">
-                <span class="tc-flag">${NATION_INFO[x.nation].flag}</span>
-                <span class="tc-name">${TANK_NAMES[x.nation][x.cls]}</span>
-                <span class="tc-cls">${CLASS_INFO[x.cls].short}</span>
-              </button>`).join('')}
+            ${shown.map((g) => `
+              <div class="tgroup">
+                <div class="tglabel">${NATION_INFO[g.n].flag} ${NATION_INFO[g.n].name}</div>
+                <div class="tgcards">${g.tanks.map(tankCard).join('')}</div>
+              </div>`).join('')}
           </div>
           <div class="actions">
             <button class="ui-btn" data-a="parts">🧩 Parçalar <small>${p.parts.length}</small></button>
@@ -181,6 +204,13 @@ export class App {
         sfx.click();
         p.selectedTankId = b.dataset.t!;
         this.save();
+        this.showGarage();
+      }),
+    );
+    this.ui.querySelectorAll<HTMLButtonElement>('[data-nf]').forEach((b) =>
+      b.addEventListener('click', () => {
+        sfx.click();
+        this.tankFilter = b.dataset.nf as Nation | 'all';
         this.showGarage();
       }),
     );
@@ -235,7 +265,8 @@ export class App {
       ${row('Nişan süresi', s.aimTime.toFixed(1) + ' s', (1 - s.aimTime / 5) * 100)}
       ${row('Top eğilmesi', '-' + s.gunDepression.toFixed(0) + '°', (s.gunDepression / 15) * 100)}
       ${row('Zoom', '×' + s.zoom.toFixed(1), (s.zoom / 6) * 100)}
-      ${row('Zırh analizi', ['Yok', 'Renk', 'Renk + %', 'Renk + % + hasar'][s.opticTier], (s.opticTier / 3) * 100)}
+      ${row('Delme tahmini', s.opticLevel >= 8 ? 'Kusursuz' : '±%' + Math.round(OPTIC_ERROR[s.opticLevel] * 100), (s.opticLevel / 8) * 100)}
+      ${row('Ram gücü', '×' + s.ramPower.toFixed(2), (s.ramPower * s.mass / 3) * 100)}
     </div>`;
   }
 
@@ -375,6 +406,7 @@ export class App {
       <div class="setting"><span>Grafik kalitesi</span>
         <div><button class="chip ${this.quality === 'high' ? 'on' : ''}" data-q="high">Yüksek</button><button class="chip ${this.quality === 'low' ? 'on' : ''}" data-q="low">Düşük</button></div></div>
       <div class="setting"><span>Ses</span><button class="chip ${isMuted() ? '' : 'on'}" data-mute>${isMuted() ? 'Kapalı' : 'Açık'}</button></div>
+      <div class="setting"><span>Diğer oyunlar</span><a class="ui-btn" href="https://dorukplays.com">dorukplays.com'a dön</a></div>
       <div class="setting"><span>İlerlemeyi sıfırla</span><button class="ui-btn danger" data-reset>Sıfırla</button></div>
       <p class="hint">İlerlemen bu tarayıcıda saklanır.</p>`;
     const m = this.openModal('settings', '⚙ Ayarlar', body);
@@ -413,7 +445,7 @@ export class App {
       <p>Mermi zırhı delerse hasar verir. Eğimli zırh daha kalındır, çok açılı vuruşlar sekebilir. Optic parçası, nişan aldığın yerin delinip delinmeyeceğini renkle gösterir (kırmızı: delemez, yeşil: deler).</p>
       <h3>Ödüller</h3>
       <p>Verdiğin hasar kadar para kazanırsın (galibiyette 2 katı). Galibiyette %${DROP_CHANCE.tank.win * 100} tank, %${DROP_CHANCE.part.win * 100} parça; mağlubiyette %${DROP_CHANCE.tank.loss * 100} tank, %${DROP_CHANCE.part.loss * 100} parça şansı.</p>`;
-    this.openModal('help', '❔ Nasıl oynanır', body);
+    this.openModal('help', '❔ Nasıl oynanır', body + `<h3>Krediler</h3><p>Tank modelleri: Quaternius, "Animated Tank Pack" (CC0).</p>`);
   }
 
   // ------------------------------------------------------------ battle

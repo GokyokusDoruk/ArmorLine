@@ -113,8 +113,14 @@ export interface TankStats {
   shellSpeed: number;
   /** HE splash radius (artillery), 0 = none. */
   splash: number;
-  /** 0 = no analysis, 1 = color, 2 = + pen %, 3 = + expected damage. */
-  opticTier: number;
+  /** Optic quality: 0 = no optic, 1..8 = poor..divine. Higher = more accurate pen/damage estimate. */
+  opticLevel: number;
+  /** Multiplier on damage dealt when ramming with the front. */
+  ramPower: number;
+  /** Extra ricochet chance on front hull hits (Front Armor part). */
+  frontRicochet: number;
+  /** Mass factor used for ramming and wall impacts. */
+  mass: number;
 }
 
 const BASE: Record<TankClass, TankStats> = {
@@ -124,7 +130,7 @@ const BASE: Record<TankClass, TankStats> = {
     turretArmor: { front: 190, side: 110, rear: 70 },
     ricochet: 0.3, speed: 9, accel: 7, hullTraverse: 38, turretTraverse: 42,
     view: 55, dispersion: 0.012, aimTime: 2.3, zoom: 1.6,
-    gunDepression: 7, gunElevation: 18, shellSpeed: 170, splash: 0, opticTier: 0,
+    gunDepression: 7, gunElevation: 18, shellSpeed: 170, splash: 0, opticLevel: 0, ramPower: 1, frontRicochet: 0, mass: 1.5,
   },
   mobile: {
     hp: 1100, damage: 170, pen: 135, reload: 3.6, magazine: 1, clipInterval: 0,
@@ -132,7 +138,7 @@ const BASE: Record<TankClass, TankStats> = {
     turretArmor: { front: 65, side: 40, rear: 28 },
     ricochet: 0.12, speed: 18, accel: 11, hullTraverse: 70, turretTraverse: 75,
     view: 82, dispersion: 0.02, aimTime: 1.7, zoom: 1.5,
-    gunDepression: 8, gunElevation: 20, shellSpeed: 160, splash: 0, opticTier: 0,
+    gunDepression: 8, gunElevation: 20, shellSpeed: 160, splash: 0, opticLevel: 0, ramPower: 1, frontRicochet: 0, mass: 0.8,
   },
   sniper: {
     hp: 850, damage: 470, pen: 265, reload: 8, magazine: 1, clipInterval: 0,
@@ -140,7 +146,7 @@ const BASE: Record<TankClass, TankStats> = {
     turretArmor: { front: 50, side: 30, rear: 20 },
     ricochet: 0.08, speed: 7.5, accel: 3.5, hullTraverse: 30, turretTraverse: 30,
     view: 68, dispersion: 0.005, aimTime: 2.8, zoom: 3.2,
-    gunDepression: 9, gunElevation: 15, shellSpeed: 260, splash: 0, opticTier: 0,
+    gunDepression: 9, gunElevation: 15, shellSpeed: 260, splash: 0, opticLevel: 0, ramPower: 1, frontRicochet: 0, mass: 0.9,
   },
   artillery: {
     hp: 800, damage: 560, pen: 85, reload: 12, magazine: 1, clipInterval: 0,
@@ -148,7 +154,7 @@ const BASE: Record<TankClass, TankStats> = {
     turretArmor: { front: 30, side: 20, rear: 15 },
     ricochet: 0.05, speed: 7, accel: 3, hullTraverse: 26, turretTraverse: 26,
     view: 45, dispersion: 0.035, aimTime: 3.5, zoom: 1,
-    gunDepression: 5, gunElevation: 60, shellSpeed: 80, splash: 7, opticTier: 0,
+    gunDepression: 5, gunElevation: 60, shellSpeed: 80, splash: 7, opticLevel: 0, ramPower: 1, frontRicochet: 0, mass: 0.9,
   },
 };
 
