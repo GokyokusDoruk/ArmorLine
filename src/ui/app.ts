@@ -20,9 +20,11 @@ function rarityBadge(r: Rarity): string {
   return `<span class="rbadge r-${r}" style="--rc:${rarityCss(r)}">${RARITY_INFO[r].name}</span>`;
 }
 
-/** Photo of a tank model, served from public/tanks. */
+/** Tank photos, bundled by Vite with content-hashed file names (safe to cache forever). */
+const TANK_IMAGES = import.meta.glob<string>('../assets/tanks/*.jpg', { eager: true, query: '?url', import: 'default' });
+
 function tankImg(n: Nation, c: TankClass): string {
-  return `${import.meta.env.BASE_URL}tanks/${n}-${c}.jpg`;
+  return TANK_IMAGES[`../assets/tanks/${n}-${c}.jpg`] ?? '';
 }
 
 function coins(n: number): string {
