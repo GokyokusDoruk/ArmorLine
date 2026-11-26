@@ -13,7 +13,7 @@ import { Fx } from './fx';
 import { Hud } from './hud';
 import { Input } from './input';
 import { ENGINE_DAMAGE_CHANCE, TRACK_STUN, Tank, ZONES, wrapAngle, type ArmorZone, type TankHit, type TankSpec } from './tank';
-import { updateDivineTrim } from './tankModel';
+import { updateDivineTrim, updateTrackAnim } from './tankModel';
 import { buildWorld, heightAt, lineOfSight, raycastStatic, rectOverlap } from './world';
 
 export const MATCH_SECONDS = 300;
@@ -350,6 +350,7 @@ export class Battle implements AiWorld {
       t.syncModel();
       if (visual) {
         updateDivineTrim(t.model, this.time);
+        if (t.alive && t.model.root.visible) updateTrackAnim(t.model, t.speed, t.steer, dt);
         t.model.root.visible = t.spec.team === this.player.spec.team || this.visibleTo(this.player.spec.team, t);
       }
     }
@@ -862,9 +863,9 @@ export class Battle implements AiWorld {
       camPos.y += 0.3;
     } else {
       const portrait = window.innerHeight > window.innerWidth;
-      const dist = (focus.spec.cls === 'heavy' ? 13 : 11.5) * (portrait ? 1.15 : 1);
+      const dist = (focus.dims.L * 1.1 + 4) * (portrait ? 1.1 : 1);
       camPos = pivot.clone().addScaledVector(dir, -dist);
-      camPos.y += portrait ? 5.2 : 3.4;
+      camPos.y += portrait ? 4.2 : 2.8;
       // keep the camera out of walls and terrain
       const toCam = camPos.clone().sub(pivot);
       const len = toCam.length();

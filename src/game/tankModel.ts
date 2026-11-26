@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RARITY_INFO, type Rarity } from '../data/rarity';
-import { NATION_INFO, type Nation, type TankClass } from '../data/tanks';
+import { CLASSES, NATION_INFO, type Nation, type TankClass } from '../data/tanks';
+import { cloneTemplate, getTemplate } from './models';
 
 export interface TankDims {
   /** Hull length (z), width (x), height (y). */
@@ -35,6 +36,117 @@ export interface TankModel {
   divine: boolean;
   /** Weak-spot overlays, shown to the player while zoomed. */
   weak: Record<WeakZone, THREE.Mesh>;
+  /** Track animation (GLB models only). */
+  anim?: { mixer: THREE.AnimationMixer; fwd: THREE.AnimationAction; back: THREE.AnimationAction; left: THREE.AnimationAction; right: THREE.AnimationAction };
+}
+
+/** After the GLB models load, size the hitboxes to match them. */
+export function applyModelDims(): void {
+  for (const cls of CLASSES) {
+    const t = getTemplate(cls);
+    if (!t) continue;
+    const m = t.measure;
+    const d = DIMS[cls];
+    d.L = m.L;
+    d.W = m.W;
+    d.H = m.H / 0.95;
+    d.tL = m.tL;
+    d.tW = m.tW;
+    d.tH = m.tH;
+    d.tZ = m.tZ;
+    d.barrel = m.barrel;
+    d.radius = Math.max(m.L, m.W) / 2;
+  }
+}
+
+/** Rarity trim strips and weak-spot overlays shared by both model kinds. */
+function addTrimAndWeak(body: THREE.Group, turret: THREE.Group, d: TankDims, trim: THREE.Material): Record<WeakZone, THREE.Mesh> {
+  for (const s of [-1, 1]) {
+    body.add(box(0.08, 0.12, d.L * 0.8, trim, s * (d.W / 2 + 0.02), d.H * 0.55, 0));
+  }
+  turret.add(box(d.tW * 0.9, 0.08, 0.08, trim, 0, d.tH * 0.7, -d.tL / 2 - 0.03));
+  const lowerFront = weakMesh(d.W * 0.86, d.H * 0.36, 0.12);
+  lowerFront.position.set(0, d.H * 0.2, d.L / 2 + 0.05);
+  body.add(lowerFront);
+  const rear = weakMesh(d.W * 0.8, d.H * 0.5, 0.12);
+  rear.position.set(0, d.H * 0.45, -d.L / 2 - 0.05);
+  body.add(rear);
+  const cupola = weakMesh(d.tW * 0.6, d.tH * 0.32, d.tL * 0.6);
+  cupola.position.set(0, d.tH * 0.86, -d.tL * 0.05);
+  turret.add(cupola);
+  return { lowerFront, rear, cupola };
+}
+
+/** Builds a tank from the CC0 GLB model, painted in the nation's colors. */
+function buildGlbModel(nation: Nation, cls: TankClass, rarity: Rarity): TankModel | null {
+  const inst = cloneTemplate(cls);
+  if (!inst) return null;
+  const d = DIMS[cls];
+  const [bodyColor] = NATION_INFO[nation].colors;
+  const base = new THREE.Color(bodyColor);
+  const tints: Record<string, THREE.Color> = {
+    Main: base.clone(),
+    Main_Light: base.clone().multiplyScalar(1.3),
+    Main_Dark: base.clone().multiplyScalar(0.65),
+    Main_Details: new THREE.Color(0x2e3238),
+  };
+  const paint: THREE.MeshStandardMaterial[] = [];
+  const cache = new Map<THREE.Material, THREE.Material>();
+  inst.root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const swap = (m: THREE.Material) => {
+      let c = cache.get(m);
+      if (!c) {
+        c = m.clone();
+        const std = c as THREE.MeshStandardMaterial;
+        const tint = tints[m.name];
+        if (tint && std.color) std.color.copy(tint);
+        if (std.isMeshStandardMaterial) {
+          std.metalness = Math.min(std.metalness, 0.2);
+          paint.push(std);
+        }
+        cache.set(m, c);
+      }
+      return c;
+    };
+    mesh.material = Array.isArray(mesh.material) ? mesh.material.map(swap) : swap(mesh.material);
+  });
+
+  const root = new THREE.Group();
+  const body = inst.root as THREE.Group;
+  root.add(body);
+  const turret = body.getObjectByName('al_turret') as THREE.Group;
+  const gun = body.getObjectByName('al_gun') as THREE.Group;
+  const muzzle = body.getObjectByName('al_muzzle')!;
+  const rc = RARITY_INFO[rarity].color;
+  const trim = new THREE.MeshBasicMaterial({ color: rarity === 'divine' ? 0xffffff : new THREE.Color(rc) });
+  const weak = addTrimAndWeak(body, turret, d, trim);
+
+  const mixer = new THREE.AnimationMixer(body);
+  const clip = (n: string) => inst.clips.find((c) => c.name.includes(n));
+  const act = (n: string) => {
+    const c = clip(n);
+    const a = mixer.clipAction(c ?? new THREE.AnimationClip(n, 0, []));
+    a.play();
+    a.setEffectiveWeight(0);
+    return a;
+  };
+  const anim = { mixer, fwd: act('Forward'), back: act('Backwards'), left: act('TurningLeft'), right: act('TurningRight') };
+  return { root, body, turret, gun, muzzle, trim, paint, divine: rarity === 'divine', weak, anim };
+}
+
+/** Blend track animations by speed and turning. */
+export function updateTrackAnim(m: TankModel, speed: number, turn: number, dt: number): void {
+  const a = m.anim;
+  if (!a) return;
+  const k = Math.min(1, Math.abs(speed) / 6);
+  a.fwd.setEffectiveWeight(speed > 0.2 ? k : 0);
+  a.back.setEffectiveWeight(speed < -0.2 ? k : 0);
+  const still = Math.abs(speed) < 0.2;
+  a.left.setEffectiveWeight(still && turn > 0.05 ? 1 : 0);
+  a.right.setEffectiveWeight(still && turn < -0.05 ? 1 : 0);
+  a.mixer.update(dt * (0.5 + k));
 }
 
 export type WeakZone = 'lowerFront' | 'rear' | 'cupola';
@@ -67,6 +179,11 @@ function slope(w: number, len: number, angle: number, mat: THREE.Material, y: nu
 }
 
 export function buildTankModel(nation: Nation, cls: TankClass, rarity: Rarity): TankModel {
+  return buildGlbModel(nation, cls, rarity) ?? buildBoxModel(nation, cls, rarity);
+}
+
+/** Fallback tank made of boxes (used if the GLB models can't load). */
+function buildBoxModel(nation: Nation, cls: TankClass, rarity: Rarity): TankModel {
   const d = DIMS[cls];
   const [bodyColor, accent] = NATION_INFO[nation].colors;
   const paint = new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.6, metalness: 0.12 });
@@ -191,6 +308,7 @@ export function setDestroyedLook(m: TankModel): void {
   }
   m.trim.color.setHex(0x222222);
   for (const w of Object.values(m.weak)) w.visible = false;
+  if (m.anim) m.anim.mixer.stopAllAction();
   m.divine = false;
   m.turret.rotation.z = 0.25;
   m.turret.position.y += 0.3;

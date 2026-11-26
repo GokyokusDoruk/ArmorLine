@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Rarity } from '../data/rarity';
 import type { Nation, TankClass } from '../data/tanks';
-import { buildTankModel, updateDivineTrim, type TankModel } from '../game/tankModel';
+import { buildTankModel, updateDivineTrim, updateTrackAnim, type TankModel } from '../game/tankModel';
 
 /** Rotating 3D tank on a neon pad, drawn behind the garage UI. */
 export class GaragePreview {
@@ -38,6 +38,11 @@ export class GaragePreview {
     this.scene.add(grid);
   }
 
+  /** Forget the current model so the next show() rebuilds it (e.g. after GLB models load). */
+  reset(): void {
+    this.key = '';
+  }
+
   show(nation: Nation, cls: TankClass, rarity: Rarity, ringColor: string): void {
     const k = `${nation}-${cls}-${rarity}`;
     (this.ring.material as THREE.MeshBasicMaterial).color.set(ringColor === 'rainbow' ? '#ffffff' : ringColor);
@@ -63,11 +68,12 @@ export class GaragePreview {
       this.model.root.rotation.y = this.t * 0.35;
       this.model.turret.rotation.y = Math.sin(this.t * 0.6) * 0.4;
       updateDivineTrim(this.model, this.t);
+      updateTrackAnim(this.model, 0, 0, dt);
     }
     const portrait = window.innerHeight > window.innerWidth;
     if (portrait) {
-      this.camera.position.set(0, 9, 25);
-      this.camera.lookAt(0, 0.4, 0);
+      this.camera.position.set(0, 7.5, 21);
+      this.camera.lookAt(0, -2.2, 0);
     } else {
       // UI sits on the right in landscape, so shift the tank left.
       this.camera.position.set(5, 7, 21);

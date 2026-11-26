@@ -11,6 +11,8 @@ import { buyOffer, msUntilRefresh, shopOffers } from '../meta/shop';
 import { Battle, type BattleResult } from '../game/battle';
 import { isMuted, setMuted, sfx, unlockAudio } from '../game/audio';
 import { GaragePreview } from './preview';
+import { loadTankModels } from '../game/models';
+import { applyModelDims } from '../game/tankModel';
 
 type Screen = 'nation' | 'garage' | 'battle';
 
@@ -51,8 +53,13 @@ export class App {
     window.addEventListener('resize', () => this.resize());
     window.addEventListener('pointerdown', () => unlockAudio(), { capture: true });
     this.resize();
-    if (this.profile.tanks.length === 0) this.showNation();
-    else this.showGarage();
+    this.ui.innerHTML = '<div class="screen loading"><div class="logo">ARMOR<span>LINE</span></div><p class="sub">Tanklar yükleniyor…</p></div>';
+    void loadTankModels().then(() => {
+      applyModelDims();
+      this.preview.reset();
+      if (this.profile.tanks.length === 0) this.showNation();
+      else this.showGarage();
+    });
     renderer.setAnimationLoop(() => this.loop());
     if (import.meta.env.DEV) (window as unknown as { __app: App }).__app = this;
   }
@@ -438,7 +445,7 @@ export class App {
       <p>Mermi zırhı delerse hasar verir. Eğimli zırh daha kalındır, çok açılı vuruşlar sekebilir. Optic parçası, nişan aldığın yerin delinip delinmeyeceğini renkle gösterir (kırmızı: delemez, yeşil: deler).</p>
       <h3>Ödüller</h3>
       <p>Verdiğin hasar kadar para kazanırsın (galibiyette 2 katı). Galibiyette %${DROP_CHANCE.tank.win * 100} tank, %${DROP_CHANCE.part.win * 100} parça; mağlubiyette %${DROP_CHANCE.tank.loss * 100} tank, %${DROP_CHANCE.part.loss * 100} parça şansı.</p>`;
-    this.openModal('help', '❔ Nasıl oynanır', body);
+    this.openModal('help', '❔ Nasıl oynanır', body + `<h3>Krediler</h3><p>Tank modelleri: Quaternius, "Animated Tank Pack" (CC0).</p>`);
   }
 
   // ------------------------------------------------------------ battle

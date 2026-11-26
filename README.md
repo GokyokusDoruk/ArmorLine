@@ -44,3 +44,6 @@ npm run build
 - Derleme komutu: `npm run build`
 - Çıktı klasörü: `dist`
 - Alan adı: `armorline.dorukplays.com`
+
+## Krediler
+- Tank 3D modelleri: [Animated Tank Pack](https://poly.pizza/bundle/Animated-Tank-Pack-0tfvbeAJkU), Quaternius, CC0 (kamu malı). Dosyalar `src/assets/models/` altında; oyun bunları ülke renklerine boyar ve taret/topu ayrı döndürür. Yüklenemezlerse basit kutu tanklara geri döner.
