@@ -12,12 +12,15 @@
   --gold: #ffc531;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+html, body { margin: 0; height: 100%; height: 100dvh; width: 100%; overflow: hidden; overflow-x: hidden; background: var(--bg); color: var(--text);
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; user-select: none; -webkit-user-select: none;
-  overscroll-behavior: none; touch-action: none; }
+  overscroll-behavior: none; touch-action: none; -webkit-touch-callout: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+img { max-width: 100%; -webkit-user-drag: none; }
 #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 #ui { position: fixed; inset: 0; pointer-events: none; }
 #ui > * { pointer-events: auto; }
@@ -123,6 +126,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   font-style: italic; background: linear-gradient(180deg, #ffb52e, #ff7a18); color: #1a0e00; box-shadow: 0 0 22px rgba(255, 150, 40, 0.5); }
 .battle-btn:active { transform: scale(0.98); }
 .battle-btn small { font-size: 13px; opacity: 0.7; margin-left: 6px; }
+/* Garage sections: on desktop the wrappers vanish and every section is shown; phones get tabs (see mobile block). */
+.gtabs, .joy-hint { display: none; }
+.gsec { display: contents; }
 .tlevel { margin-top: 4px; font-size: 13px; color: var(--muted); }
 .tlevel b { color: var(--gold); font-size: 16px; }
 .weapon-row, .mode-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
@@ -311,3 +317,142 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   background: rgba(15, 25, 50, 0.35); pointer-events: none; }
 .joy-knob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; border-radius: 50%; background: rgba(120, 180, 255, 0.55);
   border: 2px solid rgba(200, 230, 255, 0.8); transform: translate(-50%, -50%); }
+
+/* =====================================================================
+   Mobile (phones up to 768px wide, and phones held sideways).
+   Everything below only applies to small / touch screens; desktop layout is untouched.
+   ===================================================================== */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .screen { padding-left: calc(12px + var(--safe-l)); padding-right: calc(12px + var(--safe-r)); overflow-x: hidden; }
+  .garage { padding-left: calc(10px + var(--safe-l)); padding-right: calc(10px + var(--safe-r)); }
+
+  /* Touch targets: at least 44px. */
+  .ui-btn, .chip, .wchip, .gtab { min-height: 44px; }
+  .icon-btn { width: 44px; height: 44px; flex-shrink: 0; }
+  .home-link { min-height: 36px; display: inline-flex; align-items: center; }
+  .topbar { gap: 8px; }
+  .topbar .coins { padding: 8px 12px; }
+
+  /* Garage bottom sheet with tabs: Tanks / Equipment / Stats. */
+  .garage-bottom { max-height: 60dvh; gap: 9px; padding-bottom: 2px; overscroll-behavior: contain; }
+  .gtabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; flex-shrink: 0;
+    background: rgba(7, 11, 24, 0.75); border: 1px solid var(--line); border-radius: 14px; padding: 4px; }
+  .gtab { background: transparent; border: 0; border-radius: 10px; font-size: 13px; font-weight: 800; color: var(--muted); }
+  .gtab.on { background: #1d5fd0; color: #fff; box-shadow: 0 0 10px rgba(51, 170, 255, 0.4); }
+  .gsec { display: none; flex-direction: column; gap: 9px; flex-shrink: 0; }
+  .garage-bottom > * { flex-shrink: 0; }
+  .gtab-tanks .gsec-tanks, .gtab-equip .gsec-equip, .gtab-stats .gsec-stats { display: flex; }
+
+  .slots { gap: 8px; padding-bottom: 2px; }
+  .slots .slot { flex: 0 0 68px; min-height: 64px; justify-content: center; }
+  .sicon { font-size: 22px; }
+  .sname { font-size: 11px; }
+  .weapon-row { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .wchip { font-size: 13px; }
+  .upgrade-row { gap: 8px; }
+  .upgrade-row .ui-btn { font-size: 12px; padding: 4px; line-height: 1.2; flex-wrap: wrap; gap: 2px; }
+  .stats-box { padding: 10px 12px; }
+  .stats-box summary { min-height: 36px; display: flex; align-items: center; flex-wrap: wrap; }
+  .srow { font-size: 13px; }
+  .srow b { font-size: 13px; }
+
+  .nation-chips { gap: 6px; }
+  .nation-chips .chip { padding: 6px 12px; font-size: 13px; }
+  .tank-row { gap: 12px; overscroll-behavior-x: contain; }
+  .tgcards { gap: 8px; }
+  .tank-card { width: 104px; padding: 7px 5px; }
+  .tc-name { font-size: 13px; }
+  .tc-cls { font-size: 11px; }
+  .actions { gap: 8px; }
+  .actions .ui-btn:last-child { min-width: 48px; }
+  .mode-row { gap: 8px; }
+  .mode-row .chip { font-size: 15px; }
+  .battle-btn { padding: 14px; font-size: clamp(18px, 5.5vw, 22px); flex-shrink: 0; position: sticky; bottom: 0; z-index: 2; }
+
+  /* Garage header: compact so the 3D tank stays visible. */
+  .tank-title { margin-top: 4px; }
+  .tname { font-size: clamp(22px, 6.5vw, 34px); }
+
+  /* Nation select */
+  .nation-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 12px; }
+  .nation-card { padding: 12px; }
+  .ntraits span { font-size: 12px; padding: 3px 7px; }
+
+  /* Modals become bottom sheets. */
+  .modal-wrap { align-items: flex-end; padding: calc(10px + var(--safe-t)) 0 0; }
+  .modal { max-width: 100%; max-height: 92dvh; border-radius: 18px 18px 0 0; border-bottom: 0; padding-bottom: var(--safe-b);
+    animation: sheetup 0.22s ease-out; }
+  .modal header { padding: 10px 12px 10px 16px; position: relative; }
+  .modal header::before { content: ''; position: absolute; left: 50%; top: 5px; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px;
+    background: rgba(255, 255, 255, 0.25); }
+  .modal-body { padding: 12px 14px 16px; overscroll-behavior: contain; }
+  .modal p { font-size: 15px; }
+  .part-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 10px; }
+  .pc-eff { font-size: 13px; }
+  .pc-actions .ui-btn { min-width: 96px; }
+  .filters { gap: 6px; }
+  .filters .chip { margin: 0; }
+  .odd { grid-template-columns: minmax(80px, 110px) 52px 1fr; }
+  .setting { min-height: 56px; }
+  .res-title { font-size: clamp(32px, 10vw, 46px); }
+  .res-stats { gap: clamp(12px, 5vw, 22px); flex-wrap: wrap; }
+  .drop { min-width: 0; width: 100%; max-width: 320px; }
+  .sb table { font-size: 13px; }
+
+  /* ---- Battle HUD */
+  .hud-top { gap: 6px; left: calc(8px + var(--safe-l)); right: calc(8px + var(--safe-r)); transform: none; justify-content: center; align-items: flex-start; }
+  .team { flex-wrap: wrap; flex: 0 1 calc((100% - 92px) / 2); align-content: flex-start; }
+  .team-a { justify-content: flex-end; }
+  .pip { width: 17px; height: 17px; font-size: 10px; border-radius: 4px; }
+  .timer { font-size: 18px; min-width: 76px; padding: 3px 12px 5px; }
+  .minimap { left: calc(8px + var(--safe-l)); width: clamp(84px, 24vw, 110px); height: clamp(84px, 24vw, 110px); top: calc(54px + var(--safe-t)); }
+  .hud-dmg { right: calc(8px + var(--safe-r)); top: calc(54px + var(--safe-t)); }
+  .team-b { justify-content: flex-start; }
+  .menu-btn { right: calc(8px + var(--safe-r)); top: calc(86px + var(--safe-t)); width: 44px; height: 44px; font-size: 19px; }
+  .score-btn { right: calc(8px + var(--safe-r)); top: calc(136px + var(--safe-t)); width: 44px; height: 44px; font-size: 19px; }
+  .feed { right: calc(60px + var(--safe-r)); top: calc(86px + var(--safe-t)); max-width: 46vw; }
+  .feed div { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .fire-btn { right: calc(16px + var(--safe-r)); width: 96px; height: 96px; }
+  .zoom-btn { right: calc(34px + var(--safe-r)); bottom: calc(138px + var(--safe-b)); width: 60px; height: 60px; }
+  .arty-btn { right: calc(122px + var(--safe-r)); bottom: calc(110px + var(--safe-b)); width: 60px; height: 60px; }
+  .hud .scoreboard { width: min(560px, calc(100vw - 16px)); max-height: calc(100dvh - 90px - var(--safe-t) - var(--safe-b)); overscroll-behavior: contain; }
+  .dead-panel { min-width: 0; width: min(320px, calc(100vw - 24px)); }
+  .dead-panel .ui-btn { min-height: 48px; }
+  .callout { font-size: clamp(18px, 6vw, 26px); }
+  .ret-text { font-size: 14px; }
+  .joy-base { width: 132px; height: 132px; margin: -66px 0 0 -66px; }
+  .joy-hint { display: block; }
+}
+@keyframes sheetup { from { transform: translateY(40px); opacity: 0; } }
+
+/* Phones held sideways: very little height, so shrink the top HUD and the garage header. */
+@media (pointer: coarse) and (max-height: 500px) {
+  .tank-title .trole, .tank-title .tlevel { display: none; }
+  .tphoto { width: 72px; margin-bottom: 2px; }
+  .garage-bottom { position: absolute; right: calc(10px + var(--safe-r)); top: calc(62px + var(--safe-t)); bottom: calc(8px + var(--safe-b));
+    width: min(420px, 56vw); max-height: none; margin: 0; }
+  .tank-title { position: absolute; left: calc(16px + var(--safe-l)); top: calc(62px + var(--safe-t)); text-align: left; max-width: 40vw; }
+  .tmeta { justify-content: flex-start; flex-wrap: wrap; }
+  .tphoto { margin: 0 0 4px; }
+  .minimap { width: 84px; height: 84px; }
+  .player-panel { left: calc(150px + var(--safe-l)); right: calc(150px + var(--safe-r)); width: auto; transform: none; bottom: calc(10px + var(--safe-b)); }
+  .fire-btn { bottom: calc(18px + var(--safe-b)); width: 88px; height: 88px; }
+  .zoom-btn { bottom: calc(118px + var(--safe-b)); }
+  .arty-btn { right: calc(116px + var(--safe-r)); bottom: calc(24px + var(--safe-b)); }
+}
+
+/* Very small phones (360px wide or less). */
+@media (max-width: 360px) {
+  .home-link { font-size: 11px; padding: 4px 8px; }
+  .gtab { font-size: 12px; }
+  .upgrade-row .ui-btn { font-size: 11px; }
+  .fire-btn { width: 88px; height: 88px; }
+}
+
+/* First-battle hint where the joystick lives (touch only, fades out). */
+.joy-hint { position: absolute; left: calc(22px + var(--safe-l)); bottom: calc(110px + var(--safe-b)); width: 110px; height: 110px;
+  border-radius: 50%; border: 2px dashed rgba(120, 180, 255, 0.45); color: rgba(200, 225, 255, 0.85); font-size: 11px; font-weight: 800;
+  text-align: center; pointer-events: none; animation: hintfade 6s forwards; }
+.joy-hint span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 10px; }
+@keyframes hintfade { 0%, 70% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
+@media (pointer: fine) { .joy-hint { display: none !important; } }

@@ -38,6 +38,21 @@ export class Input {
     zone.className = 'touch-zone';
     root.appendChild(zone);
 
+    if (this.touch) {
+      // Short-lived hint on touch screens: left half drives, right half aims.
+      const hint = document.createElement('div');
+      hint.className = 'joy-hint';
+      hint.innerHTML = '<span>Sol yarı: sür<br>Sağ yarı: nişan</span>';
+      root.appendChild(hint);
+    }
+    // Native touch listeners (non-passive) stop the browser from scrolling or pinch-zooming the page mid-battle.
+    const stop = (e: Event) => {
+      if ((e as TouchEvent).touches?.length > 1 || e.cancelable) e.preventDefault();
+    };
+    this.on(zone, 'touchstart', stop);
+    this.on(zone, 'touchmove', stop);
+    this.on(zone, 'touchend', stop);
+
     this.on(zone, 'pointerdown', (e) => this.pointerDown(e as PointerEvent));
     this.on(window, 'pointermove', (e) => this.pointerMove(e as PointerEvent));
     this.on(window, 'pointerup', (e) => this.pointerUp(e as PointerEvent));

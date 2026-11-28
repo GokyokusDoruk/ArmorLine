@@ -34,6 +34,8 @@ function tankImg(n: Nation, c: TankClass): string {
 const WEAPON_ICON: Record<WeaponId, string> = { heavy: '🔨', standard: '🎯', rapid: '⚡', clip: '🔁' };
 const WEAPON_SHORT: Record<WeaponId, string> = { heavy: 'Ağır', standard: 'Standart', rapid: 'Hızlı', clip: 'Şarjör' };
 
+type GarageTab = 'tanks' | 'equip' | 'stats';
+
 function coins(n: number): string {
   return `<span class="coin">◈</span> ${Math.floor(n).toLocaleString('tr-TR')}`;
 }
@@ -48,6 +50,8 @@ export class App {
   private shopTimer = 0;
   private quality: 'high' | 'low';
   private tankFilter: Nation | 'all' = 'all';
+  /** Mobile garage bottom-sheet tab (desktop shows every section). */
+  private garageTab: GarageTab = 'tanks';
   private teamSize: TeamSize = (Number(localStorage.getItem('armorline.mode')) as TeamSize) || 4;
 
   constructor(private renderer: THREE.WebGLRenderer, private ui: HTMLElement) {
@@ -178,7 +182,13 @@ export class App {
           <div class="tlevel">Seviye <b>${tankLevel(t)}</b><small>/${MAX_LEVEL}</small></div>
         </div>
 
-        <div class="garage-bottom">
+        <div class="garage-bottom gtab-${this.garageTab}">
+          <div class="gtabs" role="tablist">
+            <button class="gtab ${this.garageTab === 'tanks' ? 'on' : ''}" data-gt="tanks" role="tab">🚜 Tanklar</button>
+            <button class="gtab ${this.garageTab === 'equip' ? 'on' : ''}" data-gt="equip" role="tab">🔧 Donanım</button>
+            <button class="gtab ${this.garageTab === 'stats' ? 'on' : ''}" data-gt="stats" role="tab">📊 Özellikler</button>
+          </div>
+          <div class="gsec gsec-equip">
           <div class="slots">
             ${SLOTS.map((s) => this.slotHtml(t, s)).join('')}
           </div>
@@ -193,10 +203,14 @@ export class App {
                 : `<button class="ui-btn ${p.coins >= u.cost ? 'primary' : ''}" data-up="${n}" ${p.coins >= u.cost ? '' : 'disabled'}>+${u.steps} Sv. ${coins(u.cost)}</button>`;
             }).join('') || '<span class="hint">Maksimum seviye!</span>'}
           </div>
-          <details class="stats-box">
+          </div>
+          <div class="gsec gsec-stats">
+          <details class="stats-box" ${this.garageTab === 'stats' ? 'open' : ''}>
             <summary>Özellikler <small>${p.stats.battles} savaş · %${winRate} galibiyet</small></summary>
             ${this.statsHtml(st)}
           </details>
+          </div>
+          <div class="gsec gsec-tanks">
           <div class="nation-chips">
             <button class="chip ${this.tankFilter === 'all' ? 'on' : ''}" data-nf="all">Tümü <small>${p.tanks.length}</small></button>
             ${byNation.map((g) => `<button class="chip ${this.tankFilter === g.n ? 'on' : ''}" data-nf="${g.n}">${NATION_INFO[g.n].flag} ${NATION_INFO[g.n].name} <small>${g.tanks.length}</small></button>`).join('')}
@@ -207,6 +221,7 @@ export class App {
                 <div class="tglabel">${NATION_INFO[g.n].flag} ${NATION_INFO[g.n].name}</div>
                 <div class="tgcards">${g.tanks.map(tankCard).join('')}</div>
               </div>`).join('')}
+          </div>
           </div>
           <div class="actions">
             <button class="ui-btn" data-a="parts">🧩 Parçalar <small>${p.parts.length}</small></button>
@@ -256,6 +271,13 @@ export class App {
           this.save();
           this.showGarage();
         }
+      }),
+    );
+    this.ui.querySelectorAll<HTMLButtonElement>('[data-gt]').forEach((b) =>
+      b.addEventListener('click', () => {
+        sfx.click();
+        this.garageTab = b.dataset.gt as GarageTab;
+        this.showGarage();
       }),
     );
     this.ui.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((b) =>
